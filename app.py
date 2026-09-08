@@ -14,7 +14,7 @@ except KeyError:
     st.error("⚠️ Streamlit Secrets에 'FOOD_API_KEY'가 설정되지 않았습니다. .streamlit/secrets.toml 셋팅을 확인해주세요.")
     st.stop()
 
-# 3. 공공 API 호출 함수 (최신 데이터 1000건 추출)
+# 3. 공공 API 호출 함수 (디버깅 로직 포함)
 @st.cache_data(ttl=3600) # 1시간마다 데이터 갱신
 def fetch_food_safety_data():
     # 식품안전나라 API 엔드포인트 구조 (I2710: 국내 검사부적합)
@@ -22,13 +22,20 @@ def fetch_food_safety_data():
     
     try:
         # 1차 호출: 전체 데이터 건수 파악 및 최신 1000건 가져오기
-        # 식품안전나라 API는 /시작인덱스/종료인덱스 형태로 호출
         base_url = f"http://openapi.foodsafetykorea.go.kr/api/{API_KEY}/{api_service_code}/json/1/1000"
         
         res = requests.get(base_url)
         res.raise_for_status()
         data = res.json()
         
+        # 🚨 API 응답에 에러 메시지가 있는지 확인 (디버깅용)
+        if "RESULT" in data and "CODE" in data["RESULT"]:
+            error_code = data["RESULT"]["CODE"]
+            error_msg = data["RESULT"]["MSG"]
+            st.error(f"⚠️ 식품안전나라 API 응답 에러: [{error_code}] {error_msg}")
+            return pd.DataFrame()
+        
+        # 정상 응답일 경우 데이터 추출
         if api_service_code in data and 'row' in data[api_service_code]:
             df = pd.DataFrame(data[api_service_code]['row'])
             
@@ -55,10 +62,12 @@ def fetch_food_safety_data():
                 
             return df
         else:
+            # 알 수 없는 응답 구조일 경우
+            st.error(f"⚠️ 알 수 없는 API 응답 형태입니다: {data}")
             return pd.DataFrame()
 
     except Exception as e:
-        st.error(f"API 호출 중 오류 발생: {e}")
+        st.error(f"네트워크/통신 오류 발생: {e}")
         return pd.DataFrame()
 
 # 4. 기준 일시 설정
