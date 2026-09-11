@@ -60,6 +60,9 @@ def generate_excel(text_data, excel_df):
     border_thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     align_left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    
+    # 공통 회색 음영 스타일 정의
+    header_fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
     # 상단 헤더 영역 작성 (1~3행)
     ws.merge_cells('A1:E1')
@@ -107,12 +110,12 @@ def generate_excel(text_data, excel_df):
     ws.merge_cells('A7:D7')
     ws['A7'] = "구 분"
     ws['A7'].alignment = align_center
-    ws['A7'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+    ws['A7'].fill = header_fill
 
     ws.merge_cells('E7:L7')
     ws['E7'] = "내 용"
     ws['E7'].alignment = align_center
-    ws['E7'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+    ws['E7'].fill = header_fill
 
     # 반복 행 작성용 함수 (12칸 구조 기준 병합)
     def add_row(row_idx, col1, col2, col3=None, col4=None, merge_el=True):
@@ -136,7 +139,7 @@ def generate_excel(text_data, excel_df):
 
     # 1. 제품명 ~ 4. 작성자 (8~11행)
     add_row(8, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_el=False)
-    ws.merge_cells('E8:J8') # 제품명을 길게 차지
+    ws.merge_cells('E8:J8') 
     ws['E8'] = info.get('제품명', '')
     ws['E8'].alignment = align_left
     ws.merge_cells('K8:L8')
@@ -206,79 +209,69 @@ def generate_excel(text_data, excel_df):
     num_spec_rows = 1 + 1 + len(bio_specs) + len(chem_specs) + len(phys_specs)
     start_spec_row = curr_row
 
+    # A~B열 병합: "7. 완제품의 규격"
     ws.merge_cells(f'A{start_spec_row}:B{start_spec_row + num_spec_rows - 1}')
     ws[f'A{start_spec_row}'] = "7. 완제품의 규격"
-    ws[f'A{start_spec_row}'].alignment = align_center
-
+    
     # 성상
     ws.merge_cells(f'C{curr_row}:D{curr_row}')
     ws[f'C{curr_row}'] = "성상"
-    ws[f'C{curr_row}'].alignment = align_center
     ws.merge_cells(f'E{curr_row}:L{curr_row}')
     ws[f'E{curr_row}'] = info.get('성상', '고유의 색과 향미를 가진 균일한 액체')
     curr_row += 1
 
-    # 생물학적
+    # 생물학적 (C열 단일 병합)
     bio_start = curr_row
     ws.merge_cells(f'C{bio_start}:C{bio_start + len(bio_specs)}')
     ws[f'C{bio_start}'] = "생물학적"
-    ws[f'C{bio_start}'].alignment = align_center
     
+    # 헤더 (D~F / G~J / K~L) + 회색 음영 추가 적용
     ws.merge_cells(f'D{curr_row}:F{curr_row}')
     ws[f'D{curr_row}'] = "구 분"
-    ws[f'D{curr_row}'].alignment = align_center
+    ws[f'D{curr_row}'].fill = header_fill
+
     ws.merge_cells(f'G{curr_row}:J{curr_row}')
     ws[f'G{curr_row}'] = "법적규격"
-    ws[f'G{curr_row}'].alignment = align_center
+    ws[f'G{curr_row}'].fill = header_fill
+
     ws.merge_cells(f'K{curr_row}:L{curr_row}')
     ws[f'K{curr_row}'] = "사내규격"
-    ws[f'K{curr_row}'].alignment = align_center
+    ws[f'K{curr_row}'].fill = header_fill
     curr_row += 1
 
     for item in bio_specs:
         ws.merge_cells(f'D{curr_row}:F{curr_row}')
         ws[f'D{curr_row}'] = item[0]
-        ws[f'D{curr_row}'].alignment = align_center
         ws.merge_cells(f'G{curr_row}:J{curr_row}')
         ws[f'G{curr_row}'] = item[1]
-        ws[f'G{curr_row}'].alignment = align_center
         ws.merge_cells(f'K{curr_row}:L{curr_row}')
         ws[f'K{curr_row}'] = item[2]
-        ws[f'K{curr_row}'].alignment = align_center
         curr_row += 1
 
-    # 이화학적
+    # 이화학적 (C열 단일 병합)
     chem_start = curr_row
     ws.merge_cells(f'C{chem_start}:C{chem_start + len(chem_specs) - 1}')
     ws[f'C{chem_start}'] = "이화학적"
-    ws[f'C{chem_start}'].alignment = align_center
     for item in chem_specs:
         ws.merge_cells(f'D{curr_row}:F{curr_row}')
         ws[f'D{curr_row}'] = item[0]
-        ws[f'D{curr_row}'].alignment = align_center
         ws.merge_cells(f'G{curr_row}:J{curr_row}')
         ws[f'G{curr_row}'] = item[1]
-        ws[f'G{curr_row}'].alignment = align_center
         ws.merge_cells(f'K{curr_row}:L{curr_row}')
         ws[f'K{curr_row}'] = item[2]
-        ws[f'K{curr_row}'].alignment = align_center
         curr_row += 1
 
-    # 물리적
+    # 물리적 (C열 단일 병합)
     phys_start = curr_row
     ws.merge_cells(f'C{phys_start}:C{phys_start + len(phys_specs) - 1}')
     ws[f'C{phys_start}'] = "물리적"
-    ws[f'C{phys_start}'].alignment = align_center
     for item in phys_specs:
         ws.merge_cells(f'D{curr_row}:F{curr_row}')
         ws[f'D{curr_row}'] = item[0]
-        ws[f'D{curr_row}'].alignment = align_center
         ws.merge_cells(f'G{curr_row}:J{curr_row}')
         ws[f'G{curr_row}'] = item[1]
-        ws[f'G{curr_row}'].alignment = align_center
         ws.merge_cells(f'K{curr_row}:L{curr_row}')
         ws[f'K{curr_row}'] = item[2]
-        ws[f'K{curr_row}'].alignment = align_center
         curr_row += 1
 
     # === 8. 보존기준 ~ 13. 알러겐 ===
@@ -313,15 +306,12 @@ def generate_excel(text_data, excel_df):
     # === 14. 표시사항 (동적 공간 할당) ===
     ws.merge_cells(f'A{curr_row}:D{curr_row+14}')
     ws[f'A{curr_row}'] = "14. 표시사항"
-    ws[f'A{curr_row}'].alignment = align_center
 
     ws.merge_cells(f'E{curr_row}:H{curr_row}')
     ws[f'E{curr_row}'] = "내포장재"
-    ws[f'E{curr_row}'].alignment = align_center
 
     ws.merge_cells(f'I{curr_row}:L{curr_row}')
     ws[f'I{curr_row}'] = "외포장재"
-    ws[f'I{curr_row}'].alignment = align_center
 
     curr_row += 1
     ws.merge_cells(f'E{curr_row}:H{curr_row+13}') # 내포장재 이미지 공간
@@ -330,14 +320,15 @@ def generate_excel(text_data, excel_df):
     curr_row += 13
     ws.merge_cells(f'I{curr_row}:L{curr_row}')
     ws[f'I{curr_row}'] = f"제품명:  {info.get('제품명', '')}"
-    ws[f'I{curr_row}'].alignment = align_center
     
     last_row = curr_row
 
-    # 전체 테두리 지정 및 정렬
+    # 전체 테두리 지정 및 정렬 (모든 텍스트 중앙 정렬)
     for row in ws.iter_rows(min_row=1, max_row=3, min_col=1, max_col=12):
         for cell in row:
             cell.border = border_thin
+            if cell.alignment.horizontal is None:
+                cell.alignment = align_center
             
     for row in ws.iter_rows(min_row=7, max_row=last_row, min_col=1, max_col=12):
         for cell in row:
@@ -345,12 +336,11 @@ def generate_excel(text_data, excel_df):
             if cell.alignment.horizontal is None:
                 cell.alignment = align_center
 
-    # === A~L열 너비(Column Widths) 세밀 조정 ===
-    # 12칸을 균등 또는 비율에 맞게 분배 (합계 약 90)
+    # === 사용자가 지정한 정확한 열 크기(Column Widths) 적용 ===
     col_widths = {
-        'A': 4, 'B': 4, 'C': 4, 'D': 4,  # 좌측 항목명 영역
-        'E': 7, 'F': 7, 'G': 9, 'H': 9,  # 중앙 내용(법적규격 등) 영역
-        'I': 9, 'J': 9, 'K': 12, 'L': 12 # 우측 내용(사내규격 등) 영역
+        'A': 3.13, 'B': 9, 'C': 9, 'D': 4.5, 
+        'E': 3, 'F': 5, 'G': 5, 'H': 7, 
+        'I': 8, 'J': 9, 'K': 8.25, 'L': 8.25
     }
     for col_letter, width_val in col_widths.items():
         ws.column_dimensions[col_letter].width = width_val
