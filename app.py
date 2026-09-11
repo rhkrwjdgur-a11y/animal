@@ -2,11 +2,13 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Alignment, Font, Border, Side, PatternFill
+from openpyxl.drawing.image import Image as OpenpyxlImage
+from PIL import Image as PILImage
 import re
 from io import BytesIO
 import datetime
 
-def generate_excel(text_data, excel_df, doc_number, is_china_export):
+def generate_excel(text_data, excel_df, doc_number, is_china_export, inner_img_file, outer_img_file):
     # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
     info = {}
     
@@ -68,7 +70,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws['A1'].alignment = align_center
     ws['A1'].font = Font(bold=True)
 
-    # [수정됨] 입력받은 문서 번호 동적 적용
     ws.merge_cells('A2:E2')
     ws['A2'] = f"제품설명서 ({doc_number})"
     ws['A2'].alignment = align_center
@@ -84,7 +85,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws['F1'].alignment = align_center
     ws['F1'].font = Font(size=14, bold=True)
 
-    # 멸균/살균에 따른 우측 상단 타이틀 변경
     sterilization_val = info.get('살균방법', '')
     is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
     
@@ -104,7 +104,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws['K3'] = "2026년 2월 5일"
     ws['K3'].alignment = align_center
 
-    # [수정됨] 타이틀 (5행)에 문서 번호 동적 적용
+    # 타이틀 (5행)
     ws.merge_cells('A5:L5')
     ws['A5'] = f"{doc_number}) {info.get('제품명', '')}"
     ws['A5'].font = Font(size=12, bold=True)
@@ -120,7 +120,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws['E7'].alignment = align_center
     ws['E7'].fill = header_fill
 
-    # 반복 행 작성용 함수 (12칸 구조 기준 병합)
     def add_row(row_idx, col1, col2, col3=None, col4=None, merge_el=True):
         ws.merge_cells(f'A{row_idx}:D{row_idx}')
         ws[f'A{row_idx}'] = col1
@@ -141,7 +140,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
             ws[f'K{row_idx}'].alignment = align_center
 
     # 1. 제품명 ~ 4. 작성자 (8~11행)
-    # [수정됨] 중국수출용 체크 시 우측 텍스트 변경
     add_row(8, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_el=False)
     ws.merge_cells('E8:J8') 
     ws['E8'] = info.get('제품명', '')
@@ -149,10 +147,10 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws.merge_cells('K8:L8')
     if is_china_export:
         ws['K8'] = "중국수출용"
-        ws['K8'].font = Font(color="000000") # 검은색 폰트
+        ws['K8'].font = Font(color="000000")
     else:
         ws['K8'] = "미출시"
-        ws['K8'].font = Font(color="FF0000") # 빨간색 폰트
+        ws['K8'].font = Font(color="FF0000")
     ws['K8'].alignment = align_center
 
     add_row(9, "2. 식품의 유형", info.get('식품의 유형', ''))
@@ -172,11 +170,11 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     # 6. 포장단위 (14행)
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # === 7. 완제품의 규격 (중국수출용/살균/멸균에 따른 동적 생성) ===
+    # === 7. 완제품의 규격 ===
     food_type = info.get('식품의 유형', '')
-    legal_header = "법적규격" # 기본 헤더
+    legal_header = "법적규격" 
     
-    if is_china_export: # [수정됨] 중국 수출용 규격 (최우선 적용)
+    if is_china_export: 
         legal_header = "중국 GB 표준"
         bio_specs = [
             ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
@@ -197,7 +195,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
         ]
         phys_specs = [("이물", "불검출", "좌 동")]
         
-    elif is_pasteurized: # 살균 제품의 규격 분기
+    elif is_pasteurized: 
         if '우유' in food_type and '가공' not in food_type and '강화' not in food_type and '유당' not in food_type:
             bio_specs = [
                 ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
@@ -227,7 +225,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
                 ("총고형분(%)", "-", "6.3 이상"),
                 ("조지방(%)", "0.6 ~ 2.6", "0.8 ~ 1.2")
             ]
-        else: # 강화우유 등 기타 살균
+        else: 
             bio_specs = [
                 ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
                 ("대장균군(cfu/ml)", "n=5,c=2,m=0,M=10", "좌 동"),
@@ -243,7 +241,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
             ]
         phys_specs = [("이물", "불검출", "좌 동")]
         
-    else: # 멸균 제품의 규격 분기 
+    else: 
         if '강화우유' in food_type:
             bio_specs = [
                 ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
@@ -285,28 +283,23 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     num_spec_rows = 1 + 1 + len(bio_specs) + len(chem_specs) + len(phys_specs)
     start_spec_row = curr_row
 
-    # A~B열 병합: "7. 완제품의 규격"
     ws.merge_cells(f'A{start_spec_row}:B{start_spec_row + num_spec_rows - 1}')
     ws[f'A{start_spec_row}'] = "7. 완제품의 규격"
     
-    # 성상
     ws.merge_cells(f'C{curr_row}:D{curr_row}')
     ws[f'C{curr_row}'] = "성상"
     ws.merge_cells(f'E{curr_row}:L{curr_row}')
     ws[f'E{curr_row}'] = info.get('성상', '유백색의 균일한 액체로서 이미, 이취가 없음' if is_pasteurized else '고유의 색과 향미를 가진 균일한 액체')
     curr_row += 1
 
-    # 생물학적 (C열 단일 병합)
     bio_start = curr_row
     ws.merge_cells(f'C{bio_start}:C{bio_start + len(bio_specs)}')
     ws[f'C{bio_start}'] = "생물학적"
     
-    # 헤더 (D~F / G~J / K~L) + 회색 음영
     ws.merge_cells(f'D{curr_row}:F{curr_row}')
     ws[f'D{curr_row}'] = "구 분"
     ws[f'D{curr_row}'].fill = header_fill
 
-    # [수정됨] 법적규격 / 중국 GB 표준 헤더 적용
     ws.merge_cells(f'G{curr_row}:J{curr_row}')
     ws[f'G{curr_row}'] = legal_header
     ws[f'G{curr_row}'].fill = header_fill
@@ -325,7 +318,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
         ws[f'K{curr_row}'] = item[2]
         curr_row += 1
 
-    # 이화학적 (C열 단일 병합)
     chem_start = curr_row
     ws.merge_cells(f'C{chem_start}:C{chem_start + len(chem_specs) - 1}')
     ws[f'C{chem_start}'] = "이화학적"
@@ -338,7 +330,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
         ws[f'K{curr_row}'] = item[2]
         curr_row += 1
 
-    # 물리적 (C열 단일 병합)
     phys_start = curr_row
     ws.merge_cells(f'C{phys_start}:C{phys_start + len(phys_specs) - 1}')
     ws[f'C{phys_start}'] = "물리적"
@@ -359,7 +350,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     add_row(curr_row, "10. 소비기한" if not is_pasteurized else "10. 유통기한", info.get('소비기한', ''))
     curr_row += 1
     
-    # 살균방법 조건 로직
     if is_pasteurized:
         if '우유' in food_type or '가공유' in food_type or '강화우유' in food_type:
             sterilization_val = "130 ~ 135 ℃에서 2초간 살균"
@@ -385,7 +375,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     add_row(curr_row, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
     curr_row += 1
 
-    # === 14. 표시사항 (동적 공간 할당) ===
+    # === 14. 표시사항 및 이미지 삽입 처리 ===
     ws.merge_cells(f'A{curr_row}:D{curr_row+14}')
     ws[f'A{curr_row}'] = "14. 표시사항"
 
@@ -396,8 +386,42 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     ws[f'I{curr_row}'] = "외포장재"
 
     curr_row += 1
-    ws.merge_cells(f'E{curr_row}:H{curr_row+13}') # 내포장재 이미지 공간
-    ws.merge_cells(f'I{curr_row}:L{curr_row+12}') # 외포장재 이미지 공간
+    image_start_row = curr_row
+    ws.merge_cells(f'E{curr_row}:H{curr_row+13}') # 내포장재 공간
+    ws.merge_cells(f'I{curr_row}:L{curr_row+12}') # 외포장재 공간
+
+    # [추가됨] 엑셀 내 이미지 크기 조정 및 삽입
+    if inner_img_file:
+        pil_img = PILImage.open(inner_img_file)
+        ratio = pil_img.width / float(pil_img.height)
+        new_width = 130 # 내포장재 칸 너비 근사치
+        new_height = int(new_width / ratio)
+        if new_height > 250: # 병합된 칸의 높이를 초과하지 않도록 제한
+            new_height = 250
+            new_width = int(new_height * ratio)
+            
+        img_byte_arr = BytesIO()
+        pil_img.save(img_byte_arr, format=pil_img.format if pil_img.format else 'PNG')
+        opxl_img = OpenpyxlImage(img_byte_arr)
+        opxl_img.width = new_width
+        opxl_img.height = new_height
+        ws.add_image(opxl_img, f'E{image_start_row}')
+
+    if outer_img_file:
+        pil_img = PILImage.open(outer_img_file)
+        ratio = pil_img.width / float(pil_img.height)
+        new_width = 230 # 외포장재 칸 너비 근사치
+        new_height = int(new_width / ratio)
+        if new_height > 230:
+            new_height = 230
+            new_width = int(new_height * ratio)
+            
+        img_byte_arr = BytesIO()
+        pil_img.save(img_byte_arr, format=pil_img.format if pil_img.format else 'PNG')
+        opxl_img = OpenpyxlImage(img_byte_arr)
+        opxl_img.width = new_width
+        opxl_img.height = new_height
+        ws.add_image(opxl_img, f'I{image_start_row}')
 
     curr_row += 13
     ws.merge_cells(f'I{curr_row}:L{curr_row}')
@@ -418,7 +442,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
             if cell.alignment.horizontal is None:
                 cell.alignment = align_center
 
-    # === 사용자가 지정한 정확한 열 크기(Column Widths) 적용 ===
     col_widths = {
         'A': 3.13, 'B': 9, 'C': 9, 'D': 4.5, 
         'E': 3, 'F': 5, 'G': 5, 'H': 7, 
@@ -427,7 +450,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
     for col_letter, width_val in col_widths.items():
         ws.column_dimensions[col_letter].width = width_val
 
-    # === 행 높이(Row Heights) 동적 적용 ===
     ws.row_dimensions[1].height = 25
     ws.row_dimensions[2].height = 25
     ws.row_dimensions[3].height = 25
@@ -459,7 +481,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export):
 # Streamlit UI 구성
 st.title("제품설명서 자동 생성 시스템")
 
-# [수정됨] UI 구성: 문서 번호 입력 및 중국수출용 체크박스 추가
 st.subheader("1. 기본 옵션 설정")
 col1, col2 = st.columns(2)
 with col1:
@@ -467,10 +488,17 @@ with col1:
 with col2:
     is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
 
-st.subheader("2. 품목제조보고 목록 엑셀 파일 업로드")
+st.subheader("2. 표시사항 이미지 업로드 (선택)")
+col3, col4 = st.columns(2)
+with col3:
+    inner_img = st.file_uploader("내포장재 이미지", type=['png', 'jpg', 'jpeg'])
+with col4:
+    outer_img = st.file_uploader("외포장재 이미지", type=['png', 'jpg', 'jpeg'])
+
+st.subheader("3. 품목제조보고 목록 엑셀 파일 업로드")
 uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'])
 
-st.subheader("3. 품목제조 기본정보 텍스트 입력")
+st.subheader("4. 품목제조 기본정보 텍스트 입력")
 text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 붙여넣으세요.", height=200)
 
 if st.button("제품설명서 생성"):
@@ -481,8 +509,7 @@ if st.button("제품설명서 생성"):
             except ValueError:
                 df = pd.read_html(uploaded_file)[0]
                 
-            # 변경된 함수 호출 (doc_number, is_china_export 매개변수 추가)
-            excel_data = generate_excel(text_input, df, doc_number, is_china_export)
+            excel_data = generate_excel(text_input, df, doc_number, is_china_export, inner_img, outer_img)
             
             st.success("제품설명서 생성이 완료되었습니다.")
             st.download_button(
