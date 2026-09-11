@@ -1,191 +1,249 @@
 import streamlit as st
 import pandas as pd
-import requests
-from datetime import datetime
-import plotly.express as px
+import openpyxl
+from openpyxl.styles import Alignment, Font, Border, Side, PatternFill
+import re
+from io import BytesIO
+import datetime
 
-# 1. 페이지 기본 설정
-st.set_page_config(page_title="식품안전 검사부적합 모니터링", layout="wide")
-
-# 2. 스트림릿 시크릿에서 API 키 불러오기
-try:
-    API_KEY = st.secrets["FOOD_API_KEY"]
-except KeyError:
-    st.error("⚠️ Streamlit Secrets에 'FOOD_API_KEY'가 설정되지 않았습니다. .streamlit/secrets.toml 셋팅을 확인해주세요.")
-    st.stop()
-
-# 3. 공공 API 호출 함수 (디버깅 로직 포함)
-@st.cache_data(ttl=3600) # 1시간마다 데이터 갱신
-def fetch_food_safety_data():
-    # 식품안전나라 API 엔드포인트 구조 (I2710: 국내 검사부적합)
-    api_service_code = "I2710"
+def generate_excel(text_data, excel_df):
+    # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
+    info = {}
     
-    try:
-        # 1차 호출: 전체 데이터 건수 파악 및 최신 1000건 가져오기
-        base_url = f"http://openapi.foodsafetykorea.go.kr/api/{API_KEY}/{api_service_code}/json/1/1000"
+    report_no_match = re.search(r'품목보고번호\s*(\d+)', text_data)
+    info['품목보고번호'] = report_no_match.group(1) if report_no_match else ""
+    
+    type_match = re.search(r'식품의 유형\s*([^\n]+)', text_data)
+    info['식품의 유형'] = type_match.group(1).replace("제품명", "").strip() if type_match else ""
+    
+    name_match = re.search(r'제품명\s*([^\n]+)', text_data)
+    info['제품명'] = name_match.group(1).replace("소비기한", "").strip() if name_match else ""
+    
+    expire_match = re.search(r'소비기한\s*([^\n]+)', text_data)
+    info['소비기한'] = expire_match.group(1).replace("품질유지기한", "").strip() if expire_match else ""
+    
+    storage_match = re.search(r'보관방법 및 포장재질\s*([^\n]+)', text_data)
+    info['보관방법'] = storage_match.group(1).split('/')[0].strip() if storage_match else ""
+    
+    package_match = re.search(r'포장방법 및 포장단위\s*([^\n]+)', text_data)
+    info['포장단위'] = package_match.group(1).replace("성상", "").strip() if package_match else ""
+    
+    appearance_match = re.search(r'성상\s*([^\n]+)', text_data)
+    info['성상'] = appearance_match.group(1).replace("살균·멸균", "").strip() if appearance_match else ""
+
+    usage_match = re.search(r'용도용법\s*([^\n]+)', text_data)
+    info['용도용법'] = usage_match.group(1).replace("보관방법", "").strip() if usage_match else ""
+    
+    sterilization_match = re.search(r'살균·멸균\s*([^\n]+)', text_data)
+    info['살균방법'] = sterilization_match.group(1).replace("기타", "").strip() if sterilization_match else ""
+
+    # 2. 엑셀 파일(PRDLST_REPORT_LIST)과 매칭하여 추가 정보 추출
+    report_date = ""
+    ingredients = ""
+    
+    if info['품목보고번호'] and not excel_df.empty:
+        # 데이터프레임에서 품목보고번호 매칭 (자료형 통일)
+        excel_df['품목보고번호'] = excel_df['품목보고번호'].astype(str)
+        matched_row = excel_df[excel_df['품목보고번호'] == info['품목보고번호']]
         
-        res = requests.get(base_url)
-        res.raise_for_status()
-        data = res.json()
-        
-        # 🚨 API 응답에 에러 메시지가 있는지 확인 (디버깅용)
-        if "RESULT" in data and "CODE" in data["RESULT"]:
-            error_code = data["RESULT"]["CODE"]
-            error_msg = data["RESULT"]["MSG"]
-            st.error(f"⚠️ 식품안전나라 API 응답 에러: [{error_code}] {error_msg}")
-            return pd.DataFrame()
-        
-        # 정상 응답일 경우 데이터 추출
-        if api_service_code in data and 'row' in data[api_service_code]:
-            df = pd.DataFrame(data[api_service_code]['row'])
+        if not matched_row.empty:
+            report_date_raw = str(matched_row['신(보)고일자'].values[0])
+            if len(report_date_raw) >= 10:
+                report_date = f"{report_date_raw[:4]}년 {report_date_raw[5:7]}월 {report_date_raw[8:10]}일"
             
-            # 컬럼명 직관적으로 변경 (API 실제 응답 키 기준 매핑)
-            rename_dict = {
-                'BSSH_NM': '업체명',
-                'PRDUCT_NM': '제품명',
-                'PRDCT_TYPE': '식품유형',
-                'INSPCT_RSLT': '부적합항목',
-                'MNFCTUR_DE': '제조일자',
-                'DISTB_TMLMT': '유통기한',
-                'RTRVL_DSUSE_SEQ': '회수폐기일련번호',
-                'ADDR': '소재지'
-            }
-            df = df.rename(columns=lambda x: rename_dict.get(x, x))
-            
-            # 결측치 처리
-            df = df.fillna("")
-            
-            # 최근 제조일자 기준으로 내림차순 정렬
-            if '제조일자' in df.columns:
-                df['제조일자'] = df['제조일자'].astype(str)
-                df = df.sort_values(by="제조일자", ascending=False).reset_index(drop=True)
-                
-            return df
+            ingredients = str(matched_row['원재료(배합비)'].values[0])
+
+    # 3. 제품설명서 엑셀 양식 작성
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "제품설명서"
+
+    border_thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    align_left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+    # 상단 헤더 영역 작성
+    ws.merge_cells('A1:B3')
+    ws['A1'] = "연세대학교 연세유업\n제품설명서(99)\n품질안전부문"
+    ws['A1'].alignment = align_center
+    ws['A1'].font = Font(bold=True)
+
+    ws.merge_cells('C1:D3')
+    ws['C1'] = "HACCP\n관리기준서"
+    ws['C1'].alignment = align_center
+    ws['C1'].font = Font(size=14, bold=True)
+
+    ws.merge_cells('E1:F1')
+    ws['E1'] = "YS-HACCP(멸균유)"
+    ws['E1'].alignment = align_center
+
+    ws['E2'] = "제정일자"
+    ws['E2'].alignment = align_center
+    ws['F2'] = "1998년 3월 30일"
+    ws['F2'].alignment = align_center
+
+    ws['E3'] = "개정일자"
+    ws['E3'].alignment = align_center
+    ws['F3'] = "2026년 2월 5일"
+    ws['F3'].alignment = align_center
+
+    ws.merge_cells('A5:F5')
+    ws['A5'] = f"99) {info.get('제품명', '')}"
+    ws['A5'].font = Font(size=12, bold=True)
+
+    ws.merge_cells('A6:B6')
+    ws['A6'] = "구 분"
+    ws['A6'].alignment = align_center
+    ws['A6'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+
+    ws.merge_cells('C6:F6')
+    ws['C6'] = "내 용"
+    ws['C6'].alignment = align_center
+    ws['C6'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+
+    def add_row(row_idx, col1, col2, col3=None, col4=None, merge_cf=True):
+        ws.merge_cells(f'A{row_idx}:B{row_idx}')
+        ws[f'A{row_idx}'] = col1
+        ws[f'A{row_idx}'].alignment = align_center
+        if merge_cf:
+            ws.merge_cells(f'C{row_idx}:F{row_idx}')
+            ws[f'C{row_idx}'] = col2
+            ws[f'C{row_idx}'].alignment = align_left
         else:
-            # 알 수 없는 응답 구조일 경우
-            st.error(f"⚠️ 알 수 없는 API 응답 형태입니다: {data}")
-            return pd.DataFrame()
+            ws.merge_cells(f'C{row_idx}:D{row_idx}')
+            ws[f'C{row_idx}'] = col2
+            ws[f'C{row_idx}'].alignment = align_center
+            ws[f'E{row_idx}'] = col3
+            ws[f'E{row_idx}'].alignment = align_center
+            ws[f'F{row_idx}'] = col4
+            ws[f'F{row_idx}'].alignment = align_center
 
-    except Exception as e:
-        st.error(f"네트워크/통신 오류 발생: {e}")
-        return pd.DataFrame()
+    add_row(7, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_cf=False)
+    ws.merge_cells('C7:E7')
+    ws['C7'] = info.get('제품명', '')
+    ws['C7'].alignment = align_left
+    ws['F7'] = "미출시"
+    ws['F7'].font = Font(color="FF0000")
 
-# 4. 기준 일시 설정
-today = datetime.now()
-
-# 5. 화면 UI 구성 (사이드바 및 메인)
-st.sidebar.header("🔍 상세 검색 필터")
-
-# 데이터 로딩 상태 표시
-with st.spinner("식품의약품안전처 최신 부적합 데이터를 불러오는 중입니다..."):
-    raw_df = fetch_food_safety_data()
-
-if raw_df.empty:
-    st.warning("조회된 검사부적합 내역이 없거나, API 연동에 문제가 발생했습니다.")
-else:
-    # 사이드바 필터링 UI
-    search_company = st.sidebar.text_input("업체명 검색", placeholder="예: 농업회사법인")
-    search_product = st.sidebar.text_input("제품명 검색", placeholder="예: 우유, 치즈")
+    add_row(8, "2. 식품의 유형", info.get('식품의 유형', ''))
     
-    unique_types = ["전체"] + sorted(list(raw_df['식품유형'].dropna().unique()))
-    selected_type = st.sidebar.selectbox("식품유형 선택", unique_types)
+    add_row(9, "3. 품목제조보고 연월일", report_date, "품목보고번호", info.get('품목보고번호', ''), merge_cf=False)
     
-    # 필터 적용 로직
-    filtered_df = raw_df.copy()
-    if search_company:
-        filtered_df = filtered_df[filtered_df['업체명'].str.contains(search_company, na=False, case=False)]
-    if search_product:
-        filtered_df = filtered_df[filtered_df['제품명'].str.contains(search_product, na=False, case=False)]
-    if selected_type != "전체":
-        filtered_df = filtered_df[filtered_df['식품유형'] == selected_type]
-
-    # 아산 지역 및 유가공품 데이터 분류 (리스크 매니지먼트용)
-    asan_df = raw_df[raw_df['소재지'].astype(str).str.contains('아산', na=False)]
-    dairy_df = raw_df[raw_df['식품유형'].astype(str).str.contains('우유|유가공|치즈|발효유', na=False)]
-
-    # 메인 화면 타이틀
-    st.title("🛡️ 실시간 식품안전 검사부적합 모니터링 대시보드")
-    st.caption(f"기준일시: {today.strftime('%Y-%m-%d %H:%M')} / 데이터 출처: 식품의약품안전처 OpenAPI")
-
-    # 6. 핵심 지표 시각화 (Metrics)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="🚨 전체 부적합 적발 (최근 1000건 기준)", value=f"{len(raw_df)} 건")
-    with col2:
-        st.metric(label="🥛 유가공품 관련 부적합 건수", value=f"{len(dairy_df)} 건")
-    with col3:
-        st.metric(label="📍 관내(아산시) 업체 부적합 건수", value=f"{len(asan_df)} 건")
-
-    st.markdown("---")
-
-    # 7. AI 기반 실시간 품질 리스크 리포트
-    st.subheader("🤖 AI 기반 실시간 품질 리스크 리포트")
+    current_date_str = datetime.datetime.now().strftime("%Y년 %m월 %d일")
+    add_row(10, "4. 작성자 및 작성 연월일", "식품안전팀 곽정혁", "작성일", current_date_str, merge_cf=False)
     
-    report_text = "현재 조회된 식약처 최신 데이터를 바탕으로 분석한 QC 리스크 결과입니다.\n\n"
+    add_row(11, "5. 성분배합비율", ingredients)
+    ws.row_dimensions[11].height = 60
     
-    if len(asan_df) > 0:
-        report_text += "**[긴급 확인] 아산시 관내 업체 부적합 데이터 발생:**\n"
-        report_text += "- 관내(아산) 소재 업체의 부적합 이력이 확인되었습니다. 원부자재 납품 리스트와 해당 업체를 대조하여 입고 여부를 즉시 크로스체크하시기 바랍니다.\n"
-    else:
-        report_text += "**[안정] 아산시 관내 업체 특이사항 없음:**\n"
-        report_text += "- 관내 소재 업체의 신규 부적합 적발 내역이 없습니다.\n"
-        
-    if len(dairy_df) > 0:
-        report_text += "\n**[주의] 유가공품 카테고리 부적합 발생:**\n"
-        report_text += "- 동종 업계(유가공품, 우유류 등)의 부적합 사례가 포착되었습니다. 하단 상세 데이터에서 위반 기준규격(대장균군, 세균수 등)을 확인하고 자사 공정 관리 기준을 점검하십시오.\n"
+    add_row(12, "6. 포장단위", info.get('포장단위', ''))
 
-    st.warning(report_text) if len(asan_df) > 0 or len(dairy_df) > 0 else st.info(report_text)
+    # 완제품 규격 항목
+    ws.merge_cells('A13:A18')
+    ws['A13'] = "7. 완제품의 규격"
+    ws['A13'].alignment = align_center
 
-    # 8. Plotly 데이터 시각화 (두 가지 차트 나란히 배치)
-    st.subheader("📊 부적합 발생 통계 분석")
-    chart_col1, chart_col2 = st.columns(2)
+    ws['B13'] = "성상"
+    ws['B13'].alignment = align_center
+    ws.merge_cells('C13:F13')
+    ws['C13'] = info.get('성상', '고유의 색과 향미를 가진 균일한 액체')
+    ws['C13'].alignment = align_center
+
+    ws.merge_cells('B14:B16')
+    ws['B14'] = "생물학적"
+    ws['B14'].alignment = align_center
+
+    ws['C14'] = "구 분"
+    ws['C14'].alignment = align_center
+    ws.merge_cells('D14:E14')
+    ws['D14'] = "법적규격"
+    ws['D14'].alignment = align_center
+    ws['F14'] = "사내규격"
+    ws['F14'].alignment = align_center
+
+    ws['C15'] = "세균수(cfu/ml)"
+    ws.merge_cells('D15:E15')
+    ws['D15'] = "n=5, c=0, m=0"
+    ws['F15'] = "좌 동"
+
+    ws['C16'] = "대장균군(cfu/ml)"
+    ws.merge_cells('D16:E16')
+    ws['D16'] = "음 성"
+    ws['F16'] = "좌 동"
+
+    ws['B17'] = "이화학적"
+    ws['B17'].alignment = align_center
+    ws['C17'] = "pH"
+    ws.merge_cells('D17:E17')
+    ws['D17'] = "-"
+    ws['F17'] = "좌 동"
+
+    ws['B18'] = "물리적"
+    ws['B18'].alignment = align_center
+    ws['C18'] = "이물"
+    ws.merge_cells('D18:E18')
+    ws['D18'] = "불검출"
+    ws['F18'] = "좌 동"
+
+    add_row(19, "8. 보존기준 및 운송조건", info.get('보존방법', '실온보관'))
+    add_row(20, "9. 제품용도", info.get('용도용법', '직접음용'))
+    add_row(21, "10. 소비기한", info.get('소비기한', ''))
     
-    with chart_col1:
-        # 식품유형별 부적합 파이 차트 (상위 10개)
-        type_counts = filtered_df['식품유형'].value_counts().reset_index()
-        type_counts.columns = ['식품유형', '건수']
-        type_counts_top10 = type_counts.head(10)
-        
-        fig_pie = px.pie(type_counts_top10, values='건수', names='식품유형', 
-                         title='주요 위반 식품유형 비율 (Top 10)',
-                         hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-        st.plotly_chart(fig_pie, use_container_width=True)
-        
-    with chart_col2:
-        # 제조일자별 부적합 발생 추이 라인 차트
-        if '제조일자' in filtered_df.columns:
-            # 연-월 단위로 그룹화하기 위해 전처리
-            filtered_df['제조월'] = filtered_df['제조일자'].str[:6] # YYYYMM 추출
-            date_counts = filtered_df[filtered_df['제조월'] != ""].groupby('제조월').size().reset_index(name='건수')
-            date_counts = date_counts.sort_values('제조월')
+    # 텍스트에 포함된 멸균 방법 파싱
+    sterilization_val = info.get('살균방법', '')
+    if '멸균' in sterilization_val and '기타' in sterilization_val:
+         sterilization_val = "135~150 ℃에서 30~45초간 멸균"
+    add_row(22, "11. 살균방법", sterilization_val)
+    
+    add_row(23, "12. 포장방법 및 재질", info.get('포장단위', ''))
+    add_row(24, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
+
+    # 전체 테두리 및 너비 조정
+    for row in ws.iter_rows(min_row=1, max_row=24, min_col=1, max_col=6):
+        for cell in row:
+            cell.border = border_thin
+            if cell.alignment.horizontal is None:
+                cell.alignment = align_center
+
+    ws.column_dimensions['A'].width = 15
+    ws.column_dimensions['B'].width = 15
+    ws.column_dimensions['C'].width = 25
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 15
+    ws.column_dimensions['F'].width = 15
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+# Streamlit UI 구성
+st.title("제품설명서 자동 생성 시스템")
+
+st.subheader("1. 품목제조보고 목록 엑셀 파일 업로드")
+uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'])
+
+st.subheader("2. 품목제조 기본정보 텍스트 입력")
+text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 붙여넣으세요.", height=200)
+
+if st.button("제품설명서 생성"):
+    if uploaded_file and text_input:
+        try:
+            # 관공서 다운로드 xls 파일이 내부적으로 HTML 구조를 가지는 경우를 처리
+            try:
+                df = pd.read_excel(uploaded_file)
+            except ValueError:
+                df = pd.read_html(uploaded_file)[0]
+                
+            excel_data = generate_excel(text_input, df)
             
-            fig_line = px.line(date_counts, x='제조월', y='건수', markers=True,
-                               title='제조월별 부적합 발생 추이',
-                               line_shape='spline')
-            fig_line.update_layout(xaxis_title="제조 연월", yaxis_title="발생 건수")
-            st.plotly_chart(fig_line, use_container_width=True)
-
-    # 9. 리콜 정보 강조 및 데이터 테이블 출력
-    st.subheader("📋 필터링된 상세 데이터 및 리콜 여부")
-    
-    # 회수폐기일련번호가 있는 경우 시각적 강조
-    display_df = filtered_df.copy()
-    if '회수폐기일련번호' in display_df.columns:
-        display_df['리콜대상여부'] = display_df['회수폐기일련번호'].apply(
-            lambda x: "⚠️ 리콜대상" if pd.notna(x) and str(x).strip() != "" else "해당없음"
-        )
-        # 컬럼 순서 재배치 (리콜대상여부를 앞쪽으로)
-        cols = ['리콜대상여부', '업체명', '제품명', '식품유형', '부적합항목', '제조일자', '유통기한', '소재지']
-        existing_cols = [c for c in cols if c in display_df.columns]
-        display_df = display_df[existing_cols]
-
-    st.dataframe(display_df, use_container_width=True)
-
-    # 10. CSV 다운로드 버튼
-    csv_data = display_df.to_csv(index=False, encoding='utf-8-sig')
-    st.download_button(
-        label="📥 현재 조회된 데이터 CSV 다운로드",
-        data=csv_data,
-        file_name=f"식품안전_검사부적합_모니터링_{today.strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-    )
+            st.success("제품설명서 생성이 완료되었습니다.")
+            st.download_button(
+                label="엑셀 파일 다운로드",
+                data=excel_data,
+                file_name=f"제품설명서_자동생성.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"엑셀 파일 생성 중 오류가 발생했습니다: {e}")
+    else:
+        st.warning("엑셀 파일과 텍스트 정보를 모두 입력해주세요.")
