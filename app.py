@@ -89,9 +89,13 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     food_type = info.get('식품의 유형', '')
     is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
     
-    # 식품 유형에 따른 YS-HACCP 텍스트 분기 처리
+    # [수정됨] 식품 유형에 따른 YS-HACCP 텍스트 분기 처리 (유산균음료, 과채음료, 액상차 추가)
     ws.merge_cells('J1:L1')
-    if '농후발효유' in food_type or '발효유' in food_type:
+    if any(x in food_type for x in ['과채주스', '혼합음료', '커피', '유산균음료', '과채음료', '액상차']):
+        ws['J1'] = "YS-HACCP(음)"
+    elif '환자용' in food_type:
+        ws['J1'] = "YS-HACCP(환)"
+    elif '농후발효유' in food_type or '발효유' in food_type:
         ws['J1'] = "YS-HACCP(발)"
     elif '가공두유' in food_type:
         ws['J1'] = "YS-HACCP(두)"
@@ -179,7 +183,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     # 6. 포장단위 (14행)
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # === 7. 완제품의 규격 ===
+    # === [수정됨] 7. 완제품의 규격 ===
     legal_header = "법적규격" 
     
     if is_china_export: 
@@ -200,6 +204,63 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             ("총수은(mg/kg)", "0.01이하", "0.01이하"),
             ("총비소(mg/kg)", "0.1이하", "0.1이하"),
             ("크롬(mg/kg)", "0.3이하", "0.3이하")
+        ]
+        phys_specs = [("이물", "불검출", "좌 동")]
+
+    elif '유산균음료' in food_type:
+        bio_specs = [
+            ("일반세균(1 ㎖)", "n=5, c=0, m=0", "음 성"),
+            ("대장균군(1 ㎖)", "-", "음 성")
+        ]
+        chem_specs = [
+            ("보존료", "불검출", "좌 동"),
+            ("유산균수", "1ml 당 1,000,000 이상", "좌 동")
+        ]
+        phys_specs = [("이물", "불검출", "좌 동")]
+
+    elif '액상차' in food_type:
+        bio_specs = [
+            ("세균수(1㎖)", "n=5, c=1, m=100, M=1,000", "음 성"),
+            ("대장균군(1㎖)", "n=5, c=1, m=0, M=10", "음 성")
+        ]
+        chem_specs = [
+            ("납", "0.05이하", "좌 동"),
+            ("카드뮴", "0.1이하", "좌 동"),
+            ("타르색소", "불검출", "좌 동")
+        ]
+        phys_specs = [("이물", "-", "불검출")]
+
+    elif '과채주스' in food_type or '혼합음료' in food_type or '과채음료' in food_type:
+        bio_specs = [
+            ("세균수(1㎖)", "n=5, c=1, m=100, M=1,000", "음 성"),
+            ("대장균군(1㎖)", "n=5, c=1, m=0, M=10", "음 성")
+        ]
+        chem_specs = [
+            ("납", "0.05이하", "좌 동"),
+            ("카드뮴", "0.1이하", "좌 동"),
+            ("보존료", "불검출", "좌 동")
+        ]
+        phys_specs = [("이물", "-", "불검출")]
+
+    elif '커피' in food_type:
+        bio_specs = [
+            ("세균수(1㎖)", "n=5, c=0, m=0", "음 성"),
+            ("대장균군(1㎖)", "n=5, c=1, m=0, M=10", "음 성")
+        ]
+        chem_specs = [
+            ("납", "2.0이하", "좌 동"),
+            ("허용외 타르색소", "불검출", "좌 동")
+        ]
+        phys_specs = [("이물", "-", "불검출")]
+
+    elif '환자용' in food_type:
+        bio_specs = [
+            ("일반세균(1 ㎖)", "n=5, c=1, m=10, M=100", "음 성"),
+            ("대장균군(1 ㎖)", "n=5, c=0, m=0", "음 성"),
+            ("바실러스세레우스(1 ㎖)", "n=5, c=0, m=100", "음 성")
+        ]
+        chem_specs = [
+            ("타르색소", "불검출", "좌 동")
         ]
         phys_specs = [("이물", "불검출", "좌 동")]
 
@@ -396,16 +457,24 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "10. 소비기한" if not is_pasteurized else "10. 유통기한", info.get('소비기한', ''))
     curr_row += 1
     
-    # 농후발효유 및 발효유 살균방법 공란 처리
+    # [수정됨] 살균방법 조건 로직 변경
+    drink_types = ['과채주스', '혼합음료', '커피', '유산균음료', '과채음료', '액상차']
+    
     if ('농후발효유' in food_type or '발효유' in food_type) and not sterilization_val.strip():
         sterilization_val = "비살균"
     elif is_pasteurized:
-        if '우유' in food_type or '가공유' in food_type or '강화우유' in food_type:
+        if any(x in food_type for x in drink_types):
+            sterilization_val = "90 ~ 130℃에서 30 ~ 37초간 살균"
+        elif '우유' in food_type or '가공유' in food_type or '강화우유' in food_type:
             sterilization_val = "130 ~ 135 ℃에서 2초간 살균"
         else:
             sterilization_val = "130 ~ 135 ℃에서 2초간 살균" 
     elif '멸균' in sterilization_val:
-        if '가공두유' in food_type:
+        if any(x in food_type for x in drink_types):
+            sterilization_val = "135~150℃에서 30~37초 동안 멸균"
+        elif '환자용' in food_type:
+            sterilization_val = "143 ~ 153℃에서 3.6 ~ 4.4초간 멸균"
+        elif '가공두유' in food_type:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
         elif '가공유' in food_type:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
