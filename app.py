@@ -6,7 +6,7 @@ import re
 from io import BytesIO
 import datetime
 
-def generate_excel(text_data, excel_df):
+def generate_excel(text_data, excel_df, doc_number, is_china_export):
     # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
     info = {}
     
@@ -60,8 +60,6 @@ def generate_excel(text_data, excel_df):
     border_thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     align_left = Alignment(horizontal='left', vertical='center', wrap_text=True)
-    
-    # 공통 회색 음영 스타일 정의
     header_fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
     # 상단 헤더 영역 작성 (1~3행)
@@ -70,8 +68,9 @@ def generate_excel(text_data, excel_df):
     ws['A1'].alignment = align_center
     ws['A1'].font = Font(bold=True)
 
+    # [수정됨] 입력받은 문서 번호 동적 적용
     ws.merge_cells('A2:E2')
-    ws['A2'] = "제품설명서 (99)"
+    ws['A2'] = f"제품설명서 ({doc_number})"
     ws['A2'].alignment = align_center
     ws['A2'].font = Font(bold=True)
 
@@ -85,8 +84,12 @@ def generate_excel(text_data, excel_df):
     ws['F1'].alignment = align_center
     ws['F1'].font = Font(size=14, bold=True)
 
+    # 멸균/살균에 따른 우측 상단 타이틀 변경
+    sterilization_val = info.get('살균방법', '')
+    is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
+    
     ws.merge_cells('J1:L1')
-    ws['J1'] = "YS-HACCP(멸균유)"
+    ws['J1'] = "YS-HACCP(우)" if is_pasteurized else "YS-HACCP(멸균유)"
     ws['J1'].alignment = align_center
 
     ws['J2'] = "제정일자"
@@ -101,9 +104,9 @@ def generate_excel(text_data, excel_df):
     ws['K3'] = "2026년 2월 5일"
     ws['K3'].alignment = align_center
 
-    # 타이틀 (5행)
+    # [수정됨] 타이틀 (5행)에 문서 번호 동적 적용
     ws.merge_cells('A5:L5')
-    ws['A5'] = f"99) {info.get('제품명', '')}"
+    ws['A5'] = f"{doc_number}) {info.get('제품명', '')}"
     ws['A5'].font = Font(size=12, bold=True)
 
     # 본문 표 헤더 (7행)
@@ -138,13 +141,18 @@ def generate_excel(text_data, excel_df):
             ws[f'K{row_idx}'].alignment = align_center
 
     # 1. 제품명 ~ 4. 작성자 (8~11행)
+    # [수정됨] 중국수출용 체크 시 우측 텍스트 변경
     add_row(8, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_el=False)
     ws.merge_cells('E8:J8') 
     ws['E8'] = info.get('제품명', '')
     ws['E8'].alignment = align_left
     ws.merge_cells('K8:L8')
-    ws['K8'] = "미출시"
-    ws['K8'].font = Font(color="FF0000")
+    if is_china_export:
+        ws['K8'] = "중국수출용"
+        ws['K8'].font = Font(color="000000") # 검은색 폰트
+    else:
+        ws['K8'] = "미출시"
+        ws['K8'].font = Font(color="FF0000") # 빨간색 폰트
     ws['K8'].alignment = align_center
 
     add_row(9, "2. 식품의 유형", info.get('식품의 유형', ''))
@@ -164,46 +172,114 @@ def generate_excel(text_data, excel_df):
     # 6. 포장단위 (14행)
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # === 7. 완제품의 규격 (식품의 유형에 따른 동적 생성) ===
+    # === 7. 완제품의 규격 (중국수출용/살균/멸균에 따른 동적 생성) ===
     food_type = info.get('식품의 유형', '')
+    legal_header = "법적규격" # 기본 헤더
     
-    if '강화우유' in food_type:
+    if is_china_export: # [수정됨] 중국 수출용 규격 (최우선 적용)
+        legal_header = "중국 GB 표준"
         bio_specs = [
-            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
-            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
+            ("대장균군(cfu/ml)", "n=5,c=2,m=0,M=10", "좌 동"),
             ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
-            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동")
         ]
         chem_specs = [
-            ("산도(%)", "0.18 이하", "좌 동"),
-            ("무지유고형분(%)", "8.0 이상", "8.2 이상"),
-            ("유지방(%)", "3.0 이상", "좌 동")
+            ("비중(15 ℃)", "-", "1.028 ~ 1.034"),
+            ("산도(%)", "-", "0.18 이하"),
+            ("유지방(%)", "2.5 이상", "3.0 이상"),
+            ("단백질(%)", "2.3 이상", "-"),
+            ("납(mg/kg)", "0.05이하", "0.05이하"),
+            ("총수은(mg/kg)", "0.01이하", "0.01이하"),
+            ("총비소(mg/kg)", "0.1이하", "0.1이하"),
+            ("크롬(mg/kg)", "0.3이하", "0.3이하")
         ]
-    elif '우유' in food_type and '가공' not in food_type and '유당' not in food_type:
-        bio_specs = [
-            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
-            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
-            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
-            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
-        ]
-        chem_specs = [
-            ("산도(%)", "0.18 이하", "좌 동"),
-            ("유지방(%)", "3.0 이상", "좌 동")
-        ]
-    else: 
-        bio_specs = [
-            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
-            ("대장균군(cfu/ml)", "-", "음 성"),
-            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
-            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
-            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
-        ]
-        chem_specs = [
-            ("무지유고형분(%)", "4.0 이상", "좌 동"),
-            ("조지방(%)", "2.7 이상", "좌 동")
-        ]
-
-    phys_specs = [("이물", "불검출", "좌 동")]
+        phys_specs = [("이물", "불검출", "좌 동")]
+        
+    elif is_pasteurized: # 살균 제품의 규격 분기
+        if '우유' in food_type and '가공' not in food_type and '강화' not in food_type and '유당' not in food_type:
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
+                ("대장균군(cfu/ml)", "n=5,c=2,m=0,M=10", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동"),
+                ("황색포도상구균", "n=5, c=0, m=0", "음 성")
+            ]
+            chem_specs = [
+                ("비중(15 ℃)", "1.028 ~ 1.034", "좌 동"),
+                ("산도(%)", "0.18 이하", "좌 동"),
+                ("총고형분(%)", "-", "11.6 이상"),
+                ("유지방(%)", "3.0 이상", "좌 동")
+            ]
+        elif '가공유' in food_type:
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
+                ("대장균군(cfu/ml)", "n=5,c=2,m=0,M=10", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동"),
+                ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동")
+            ]
+            chem_specs = [
+                ("비중(15 ℃)", "-", "1.028 ~ 1.034"),
+                ("산도(%)", "-", "0.14 이하"),
+                ("무지유고형분(%)", "4.0 이상", "5.5 이상"),
+                ("총고형분(%)", "-", "6.3 이상"),
+                ("조지방(%)", "0.6 ~ 2.6", "0.8 ~ 1.2")
+            ]
+        else: # 강화우유 등 기타 살균
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5,c=2,m=10,000,M=50,000", "좌 동"),
+                ("대장균군(cfu/ml)", "n=5,c=2,m=0,M=10", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동"),
+                ("황색포도상구균", "n=5, c=0, m=0", "좌 동")
+            ]
+            chem_specs = [
+                ("비중(15 ℃)", "-", "1.028 ~ 1.034"),
+                ("산도(%)", "-", "0.18 이하"),
+                ("무지유고형분(%)", "8.0 이상", "8.2 이상"),
+                ("유지방(%)", "2.5 이상", "3.0 이상")
+            ]
+        phys_specs = [("이물", "불검출", "좌 동")]
+        
+    else: # 멸균 제품의 규격 분기 
+        if '강화우유' in food_type:
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+                ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+            ]
+            chem_specs = [
+                ("산도(%)", "0.18 이하", "좌 동"),
+                ("무지유고형분(%)", "8.0 이상", "8.2 이상"),
+                ("유지방(%)", "3.0 이상", "좌 동")
+            ]
+        elif '우유' in food_type and '가공' not in food_type and '유당' not in food_type:
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+                ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+            ]
+            chem_specs = [
+                ("산도(%)", "0.18 이하", "좌 동"),
+                ("유지방(%)", "3.0 이상", "좌 동")
+            ]
+        else: 
+            bio_specs = [
+                ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+                ("대장균군(cfu/ml)", "-", "음 성"),
+                ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+                ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+                ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+            ]
+            chem_specs = [
+                ("무지유고형분(%)", "4.0 이상", "좌 동"),
+                ("조지방(%)", "2.7 이상", "좌 동")
+            ]
+        phys_specs = [("이물", "불검출", "좌 동")]
 
     curr_row = 15
     num_spec_rows = 1 + 1 + len(bio_specs) + len(chem_specs) + len(phys_specs)
@@ -217,7 +293,7 @@ def generate_excel(text_data, excel_df):
     ws.merge_cells(f'C{curr_row}:D{curr_row}')
     ws[f'C{curr_row}'] = "성상"
     ws.merge_cells(f'E{curr_row}:L{curr_row}')
-    ws[f'E{curr_row}'] = info.get('성상', '고유의 색과 향미를 가진 균일한 액체')
+    ws[f'E{curr_row}'] = info.get('성상', '유백색의 균일한 액체로서 이미, 이취가 없음' if is_pasteurized else '고유의 색과 향미를 가진 균일한 액체')
     curr_row += 1
 
     # 생물학적 (C열 단일 병합)
@@ -225,13 +301,14 @@ def generate_excel(text_data, excel_df):
     ws.merge_cells(f'C{bio_start}:C{bio_start + len(bio_specs)}')
     ws[f'C{bio_start}'] = "생물학적"
     
-    # 헤더 (D~F / G~J / K~L) + 회색 음영 추가 적용
+    # 헤더 (D~F / G~J / K~L) + 회색 음영
     ws.merge_cells(f'D{curr_row}:F{curr_row}')
     ws[f'D{curr_row}'] = "구 분"
     ws[f'D{curr_row}'].fill = header_fill
 
+    # [수정됨] 법적규격 / 중국 GB 표준 헤더 적용
     ws.merge_cells(f'G{curr_row}:J{curr_row}')
-    ws[f'G{curr_row}'] = "법적규격"
+    ws[f'G{curr_row}'] = legal_header
     ws[f'G{curr_row}'].fill = header_fill
 
     ws.merge_cells(f'K{curr_row}:L{curr_row}')
@@ -275,15 +352,20 @@ def generate_excel(text_data, excel_df):
         curr_row += 1
 
     # === 8. 보존기준 ~ 13. 알러겐 ===
-    add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '실온보관'))
+    add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '2 ~ 6 ℃에서 냉장보관' if is_pasteurized else '실온보관'))
     curr_row += 1
     add_row(curr_row, "9. 제품용도", info.get('용도용법', '직접음용'))
     curr_row += 1
-    add_row(curr_row, "10. 소비기한", info.get('소비기한', ''))
+    add_row(curr_row, "10. 소비기한" if not is_pasteurized else "10. 유통기한", info.get('소비기한', ''))
     curr_row += 1
     
-    sterilization_val = info.get('살균방법', '')
-    if '멸균' in sterilization_val:
+    # 살균방법 조건 로직
+    if is_pasteurized:
+        if '우유' in food_type or '가공유' in food_type or '강화우유' in food_type:
+            sterilization_val = "130 ~ 135 ℃에서 2초간 살균"
+        else:
+            sterilization_val = "130 ~ 135 ℃에서 2초간 살균" 
+    elif '멸균' in sterilization_val:
         if '가공유' in food_type:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
         elif '강화우유' in food_type:
@@ -292,7 +374,7 @@ def generate_excel(text_data, excel_df):
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
         elif '우유' in food_type:
             sterilization_val = "135~150 ℃에서 10~14초간 멸균"
-        elif '기타' in sterilization_val:
+        else:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
             
     add_row(curr_row, "11. 살균방법", sterilization_val)
@@ -323,7 +405,7 @@ def generate_excel(text_data, excel_df):
     
     last_row = curr_row
 
-    # 전체 테두리 지정 및 정렬 (모든 텍스트 중앙 정렬)
+    # 전체 테두리 지정 및 정렬
     for row in ws.iter_rows(min_row=1, max_row=3, min_col=1, max_col=12):
         for cell in row:
             cell.border = border_thin
@@ -377,21 +459,30 @@ def generate_excel(text_data, excel_df):
 # Streamlit UI 구성
 st.title("제품설명서 자동 생성 시스템")
 
-st.subheader("1. 품목제조보고 목록 엑셀 파일 업로드")
+# [수정됨] UI 구성: 문서 번호 입력 및 중국수출용 체크박스 추가
+st.subheader("1. 기본 옵션 설정")
+col1, col2 = st.columns(2)
+with col1:
+    doc_number = st.text_input("문서 번호 입력 (예: 99, 44 등)", value="99")
+with col2:
+    is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
+
+st.subheader("2. 품목제조보고 목록 엑셀 파일 업로드")
 uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'])
 
-st.subheader("2. 품목제조 기본정보 텍스트 입력")
+st.subheader("3. 품목제조 기본정보 텍스트 입력")
 text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 붙여넣으세요.", height=200)
 
 if st.button("제품설명서 생성"):
-    if uploaded_file and text_input:
+    if uploaded_file and text_input and doc_number:
         try:
             try:
                 df = pd.read_excel(uploaded_file)
             except ValueError:
                 df = pd.read_html(uploaded_file)[0]
                 
-            excel_data = generate_excel(text_input, df)
+            # 변경된 함수 호출 (doc_number, is_china_export 매개변수 추가)
+            excel_data = generate_excel(text_input, df, doc_number, is_china_export)
             
             st.success("제품설명서 생성이 완료되었습니다.")
             st.download_button(
@@ -403,4 +494,4 @@ if st.button("제품설명서 생성"):
         except Exception as e:
             st.error(f"엑셀 파일 생성 중 오류가 발생했습니다: {e}")
     else:
-        st.warning("엑셀 파일과 텍스트 정보를 모두 입력해주세요.")
+        st.warning("엑셀 파일, 텍스트 정보, 그리고 문서 번호를 모두 확인해주세요.")
