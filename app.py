@@ -449,7 +449,10 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
         ws[f'K{curr_row}'] = item[2]
         curr_row += 1
 
-    # === 8. 보존기준 ~ 13. 알러겐 ===
+    # === [수정됨] 8. 보존기준 ~ 13. 알러겐 ===
+    # 항목들의 행 위치 추적 시작
+    row_item_8 = curr_row
+    
     add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '2 ~ 6 ℃에서 냉장보관' if is_pasteurized else '실온보관'))
     curr_row += 1
     add_row(curr_row, "9. 제품용도", info.get('용도용법', '직접음용'))
@@ -492,7 +495,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "12. 포장방법 및 재질", info.get('포장단위', ''))
     curr_row += 1
     
-    # === [수정됨] 13. 알러겐 주의사항 자동 분기 ===
     if '가공두유' in food_type:
         allergen_text = "본 제품은 우유, 알류, 땅콩, 밀, 복숭아, 토마토, 호두, 메밀, 아황산류, 잣을 사용한 제품과 같은 시설에서 제조하고 있습니다. / 대두 함유"
     elif '환자용' in food_type or '영양조제식품' in food_type:
@@ -540,6 +542,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             if cell.alignment.horizontal is None:
                 cell.alignment = align_center
 
+    # 컬럼 너비 설정
     col_widths = {
         'A': 3.13, 'B': 9, 'C': 9, 'D': 4.5, 
         'E': 3, 'F': 5, 'G': 5, 'H': 7, 
@@ -548,6 +551,8 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     for col_letter, width_val in col_widths.items():
         ws.column_dimensions[col_letter].width = width_val
 
+    # === [수정됨] 행 높이(Row Heights) 동적 분할 적용 ===
+    # 1. 고정 영역 (1~14행)
     ws.row_dimensions[1].height = 25
     ws.row_dimensions[2].height = 25
     ws.row_dimensions[3].height = 25
@@ -561,15 +566,23 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ws.row_dimensions[13].height = 60
     ws.row_dimensions[14].height = 16
     
-    dynamic_row = 15
-    while dynamic_row < (last_row - 14):
-        ws.row_dimensions[dynamic_row].height = 14.25
-        dynamic_row += 1
+    # 2. 동적 규격 영역 (15행 ~ row_item_8 이전)
+    for r in range(15, row_item_8):
+        ws.row_dimensions[r].height = 14.25
         
+    # 3. 항목 8 ~ 13번 영역 (13번 알러겐만 높이 50으로 설정)
+    ws.row_dimensions[row_item_8].height = 14.25     # 8. 보존기준
+    ws.row_dimensions[row_item_8 + 1].height = 14.25 # 9. 용도용법
+    ws.row_dimensions[row_item_8 + 2].height = 14.25 # 10. 소비기한
+    ws.row_dimensions[row_item_8 + 3].height = 14.25 # 11. 살균방법
+    ws.row_dimensions[row_item_8 + 4].height = 14.25 # 12. 포장방법
+    ws.row_dimensions[row_item_8 + 5].height = 50    # 13. 알러겐 주의사항 (높이 지정)
+    
+    # 4. 표시사항 및 하단 여백 (15개 행)
+    row_item_14_start = row_item_8 + 6
     tail_heights = [16, 16, 16, 16, 30, 20, 15, 15, 15, 15, 15, 15, 15, 15, 15]
-    for h in tail_heights:
-        ws.row_dimensions[dynamic_row].height = h
-        dynamic_row += 1
+    for i, h in enumerate(tail_heights):
+        ws.row_dimensions[row_item_14_start + i].height = h
 
     output = BytesIO()
     wb.save(output)
