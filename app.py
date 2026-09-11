@@ -42,7 +42,6 @@ def generate_excel(text_data, excel_df):
     ingredients = ""
     
     if info['품목보고번호'] and not excel_df.empty:
-        # 데이터프레임에서 품목보고번호 매칭 (자료형 통일)
         excel_df['품목보고번호'] = excel_df['품목보고번호'].astype(str)
         matched_row = excel_df[excel_df['품목보고번호'] == info['품목보고번호']]
         
@@ -62,7 +61,7 @@ def generate_excel(text_data, excel_df):
     align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     align_left = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
-    # 상단 헤더 영역 작성
+    # 상단 헤더 영역 작성 (1~3행)
     ws.merge_cells('A1:B3')
     ws['A1'] = "연세대학교 연세유업\n제품설명서(99)\n품질안전부문"
     ws['A1'].alignment = align_center
@@ -87,20 +86,23 @@ def generate_excel(text_data, excel_df):
     ws['F3'] = "2026년 2월 5일"
     ws['F3'].alignment = align_center
 
+    # 타이틀 (5행)
     ws.merge_cells('A5:F5')
     ws['A5'] = f"99) {info.get('제품명', '')}"
     ws['A5'].font = Font(size=12, bold=True)
 
-    ws.merge_cells('A6:B6')
-    ws['A6'] = "구 분"
-    ws['A6'].alignment = align_center
-    ws['A6'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+    # 본문 표 헤더 (7행)
+    ws.merge_cells('A7:B7')
+    ws['A7'] = "구 분"
+    ws['A7'].alignment = align_center
+    ws['A7'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
-    ws.merge_cells('C6:F6')
-    ws['C6'] = "내 용"
-    ws['C6'].alignment = align_center
-    ws['C6'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+    ws.merge_cells('C7:F7')
+    ws['C7'] = "내 용"
+    ws['C7'].alignment = align_center
+    ws['C7'].fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
+    # 반복 행 작성용 함수
     def add_row(row_idx, col1, col2, col3=None, col4=None, merge_cf=True):
         ws.merge_cells(f'A{row_idx}:B{row_idx}')
         ws[f'A{row_idx}'] = col1
@@ -118,98 +120,225 @@ def generate_excel(text_data, excel_df):
             ws[f'F{row_idx}'] = col4
             ws[f'F{row_idx}'].alignment = align_center
 
-    add_row(7, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_cf=False)
-    ws.merge_cells('C7:E7')
-    ws['C7'] = info.get('제품명', '')
-    ws['C7'].alignment = align_left
-    ws['F7'] = "미출시"
-    ws['F7'].font = Font(color="FF0000")
+    # 1. 제품명 ~ 4. 작성자 (8~11행)
+    add_row(8, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_cf=False)
+    ws.merge_cells('C8:E8')
+    ws['C8'] = info.get('제품명', '')
+    ws['C8'].alignment = align_left
+    ws['F8'] = "미출시"
+    ws['F8'].font = Font(color="FF0000")
 
-    add_row(8, "2. 식품의 유형", info.get('식품의 유형', ''))
-    
-    add_row(9, "3. 품목제조보고 연월일", report_date, "품목보고번호", info.get('품목보고번호', ''), merge_cf=False)
+    add_row(9, "2. 식품의 유형", info.get('식품의 유형', ''))
+    add_row(10, "3. 품목제조보고 연월일", report_date, "품목보고번호", info.get('품목보고번호', ''), merge_cf=False)
     
     current_date_str = datetime.datetime.now().strftime("%Y년 %m월 %d일")
-    add_row(10, "4. 작성자 및 작성 연월일", "식품안전팀 곽정혁", "작성일", current_date_str, merge_cf=False)
+    add_row(11, "4. 작성자 및 작성 연월일", "식품안전팀 곽정혁", "작성일", current_date_str, merge_cf=False)
     
-    add_row(11, "5. 성분배합비율", ingredients)
-    ws.row_dimensions[11].height = 60
+    # 5. 성분배합비율 (12~13행 병합)
+    ws.merge_cells('A12:B13')
+    ws['A12'] = "5. 성분배합비율"
+    ws['A12'].alignment = align_center
+    ws.merge_cells('C12:F13')
+    ws['C12'] = ingredients
+    ws['C12'].alignment = align_left
     
-    add_row(12, "6. 포장단위", info.get('포장단위', ''))
+    # 6. 포장단위 (14행)
+    add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # 완제품 규격 항목
-    ws.merge_cells('A13:A18')
-    ws['A13'] = "7. 완제품의 규격"
-    ws['A13'].alignment = align_center
-
-    ws['B13'] = "성상"
-    ws['B13'].alignment = align_center
-    ws.merge_cells('C13:F13')
-    ws['C13'] = info.get('성상', '고유의 색과 향미를 가진 균일한 액체')
-    ws['C13'].alignment = align_center
-
-    ws.merge_cells('B14:B16')
-    ws['B14'] = "생물학적"
-    ws['B14'].alignment = align_center
-
-    ws['C14'] = "구 분"
-    ws['C14'].alignment = align_center
-    ws.merge_cells('D14:E14')
-    ws['D14'] = "법적규격"
-    ws['D14'].alignment = align_center
-    ws['F14'] = "사내규격"
-    ws['F14'].alignment = align_center
-
-    ws['C15'] = "세균수(cfu/ml)"
-    ws.merge_cells('D15:E15')
-    ws['D15'] = "n=5, c=0, m=0"
-    ws['F15'] = "좌 동"
-
-    ws['C16'] = "대장균군(cfu/ml)"
-    ws.merge_cells('D16:E16')
-    ws['D16'] = "음 성"
-    ws['F16'] = "좌 동"
-
-    ws['B17'] = "이화학적"
-    ws['B17'].alignment = align_center
-    ws['C17'] = "pH"
-    ws.merge_cells('D17:E17')
-    ws['D17'] = "-"
-    ws['F17'] = "좌 동"
-
-    ws['B18'] = "물리적"
-    ws['B18'].alignment = align_center
-    ws['C18'] = "이물"
-    ws.merge_cells('D18:E18')
-    ws['D18'] = "불검출"
-    ws['F18'] = "좌 동"
-
-    add_row(19, "8. 보존기준 및 운송조건", info.get('보존방법', '실온보관'))
-    add_row(20, "9. 제품용도", info.get('용도용법', '직접음용'))
-    add_row(21, "10. 소비기한", info.get('소비기한', ''))
+    # === [수정됨] 7. 완제품의 규격 (식품의 유형에 따른 동적 생성) ===
+    food_type = info.get('식품의 유형', '')
     
-    # 텍스트에 포함된 멸균 방법 파싱
+    if '강화우유' in food_type:
+        bio_specs = [
+            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+        ]
+        chem_specs = [
+            ("산도(%)", "0.18 이하", "좌 동"),
+            ("무지유고형분(%)", "8.0 이상", "8.2 이상"),
+            ("유지방(%)", "3.0 이상", "좌 동")
+        ]
+    elif '우유' in food_type and '가공' not in food_type and '유당' not in food_type:
+        # 일반 우유 (대장균군, 무지유고형분 없음)
+        bio_specs = [
+            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+        ]
+        chem_specs = [
+            ("산도(%)", "0.18 이하", "좌 동"),
+            ("유지방(%)", "3.0 이상", "좌 동")
+        ]
+    else: 
+        # 가공유, 유당분해우유 등 기본 규격
+        bio_specs = [
+            ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
+            ("대장균군(cfu/ml)", "-", "음 성"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+        ]
+        chem_specs = [
+            ("무지유고형분(%)", "4.0 이상", "좌 동"),
+            ("조지방(%)", "2.7 이상", "좌 동")
+        ]
+
+    phys_specs = [("이물", "불검출", "좌 동")]
+
+    curr_row = 15
+    num_spec_rows = 1 + 1 + len(bio_specs) + len(chem_specs) + len(phys_specs) # 성상 + 구분헤더 + 각 항목 수
+    start_spec_row = curr_row
+
+    ws.merge_cells(f'A{start_spec_row}:A{start_spec_row + num_spec_rows - 1}')
+    ws[f'A{start_spec_row}'] = "7. 완제품의 규격"
+    ws[f'A{start_spec_row}'].alignment = align_center
+
+    # 성상
+    ws[f'B{curr_row}'] = "성상"
+    ws.merge_cells(f'C{curr_row}:F{curr_row}')
+    ws[f'C{curr_row}'] = info.get('성상', '고유의 색과 향미를 가진 균일한 액체')
+    curr_row += 1
+
+    # 생물학적
+    bio_start = curr_row
+    ws.merge_cells(f'B{bio_start}:B{bio_start + len(bio_specs)}')
+    ws[f'B{bio_start}'] = "생물학적"
+    ws[f'C{curr_row}'] = "구 분"
+    ws.merge_cells(f'D{curr_row}:E{curr_row}')
+    ws[f'D{curr_row}'] = "법적규격"
+    ws[f'F{curr_row}'] = "사내규격"
+    curr_row += 1
+
+    for item in bio_specs:
+        ws[f'C{curr_row}'] = item[0]
+        ws.merge_cells(f'D{curr_row}:E{curr_row}')
+        ws[f'D{curr_row}'] = item[1]
+        ws[f'F{curr_row}'] = item[2]
+        curr_row += 1
+
+    # 이화학적
+    chem_start = curr_row
+    ws.merge_cells(f'B{chem_start}:B{chem_start + len(chem_specs) - 1}')
+    ws[f'B{chem_start}'] = "이화학적"
+    for item in chem_specs:
+        ws[f'C{curr_row}'] = item[0]
+        ws.merge_cells(f'D{curr_row}:E{curr_row}')
+        ws[f'D{curr_row}'] = item[1]
+        ws[f'F{curr_row}'] = item[2]
+        curr_row += 1
+
+    # 물리적
+    phys_start = curr_row
+    ws.merge_cells(f'B{phys_start}:B{phys_start + len(phys_specs) - 1}')
+    ws[f'B{phys_start}'] = "물리적"
+    for item in phys_specs:
+        ws[f'C{curr_row}'] = item[0]
+        ws.merge_cells(f'D{curr_row}:E{curr_row}')
+        ws[f'D{curr_row}'] = item[1]
+        ws[f'F{curr_row}'] = item[2]
+        curr_row += 1
+
+    # === 8. 보존기준 ~ 13. 알러겐 ===
+    add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '실온보관'))
+    curr_row += 1
+    add_row(curr_row, "9. 제품용도", info.get('용도용법', '직접음용'))
+    curr_row += 1
+    add_row(curr_row, "10. 소비기한", info.get('소비기한', ''))
+    curr_row += 1
+    
     sterilization_val = info.get('살균방법', '')
-    if '멸균' in sterilization_val and '기타' in sterilization_val:
-         sterilization_val = "135~150 ℃에서 30~45초간 멸균"
-    add_row(22, "11. 살균방법", sterilization_val)
+    if '멸균' in sterilization_val:
+        if '가공유' in food_type:
+            sterilization_val = "135~150 ℃에서 30~45초간 멸균"
+        elif '강화우유' in food_type:
+            sterilization_val = "135~150 ℃에서 10~14초간 멸균"
+        elif '유당분해우유' in food_type:
+            sterilization_val = "135~150 ℃에서 30~45초간 멸균"
+        elif '우유' in food_type:
+            sterilization_val = "135~150 ℃에서 10~14초간 멸균"
+        elif '기타' in sterilization_val:
+            sterilization_val = "135~150 ℃에서 30~45초간 멸균"
+            
+    add_row(curr_row, "11. 살균방법", sterilization_val)
+    curr_row += 1
     
-    add_row(23, "12. 포장방법 및 재질", info.get('포장단위', ''))
-    add_row(24, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
+    add_row(curr_row, "12. 포장방법 및 재질", info.get('포장단위', ''))
+    curr_row += 1
+    add_row(curr_row, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
+    curr_row += 1
 
-    # 전체 테두리 및 너비 조정
-    for row in ws.iter_rows(min_row=1, max_row=24, min_col=1, max_col=6):
+    # === 14. 표시사항 (동적 공간 할당) ===
+    ws.merge_cells(f'A{curr_row}:B{curr_row+14}')
+    ws[f'A{curr_row}'] = "14. 표시사항"
+    ws[f'A{curr_row}'].alignment = align_center
+
+    ws.merge_cells(f'C{curr_row}:D{curr_row}')
+    ws[f'C{curr_row}'] = "내포장재"
+    ws[f'C{curr_row}'].alignment = align_center
+
+    ws.merge_cells(f'E{curr_row}:F{curr_row}')
+    ws[f'E{curr_row}'] = "외포장재"
+    ws[f'E{curr_row}'].alignment = align_center
+
+    curr_row += 1
+    ws.merge_cells(f'C{curr_row}:D{curr_row+13}') # 내포장재 이미지 공간
+    ws.merge_cells(f'E{curr_row}:F{curr_row+12}') # 외포장재 이미지 공간
+
+    curr_row += 13
+    ws.merge_cells(f'E{curr_row}:F{curr_row}')
+    ws[f'E{curr_row}'] = f"제품명:  {info.get('제품명', '')}"
+    ws[f'E{curr_row}'].alignment = align_center
+    
+    last_row = curr_row
+
+    # 전체 테두리 지정 및 정렬 (동적 범위 적용)
+    for row in ws.iter_rows(min_row=1, max_row=3, min_col=1, max_col=6):
+        for cell in row:
+            cell.border = border_thin
+            
+    for row in ws.iter_rows(min_row=7, max_row=last_row, min_col=1, max_col=6):
         for cell in row:
             cell.border = border_thin
             if cell.alignment.horizontal is None:
                 cell.alignment = align_center
 
+    # 열 너비 설정
     ws.column_dimensions['A'].width = 15
     ws.column_dimensions['B'].width = 15
     ws.column_dimensions['C'].width = 25
     ws.column_dimensions['D'].width = 15
     ws.column_dimensions['E'].width = 15
     ws.column_dimensions['F'].width = 15
+
+    # === 행 높이(Row Heights) 동적 적용 ===
+    # 1~14행 고정 높이
+    ws.row_dimensions[1].height = 25
+    ws.row_dimensions[2].height = 25
+    ws.row_dimensions[3].height = 25
+    ws.row_dimensions[4].height = 8
+    ws.row_dimensions[5].height = 16
+    ws.row_dimensions[6].height = 6
+    ws.row_dimensions[7].height = 17.25
+    for i in range(8, 12):
+        ws.row_dimensions[i].height = 16
+    ws.row_dimensions[12].height = 60
+    ws.row_dimensions[13].height = 60
+    ws.row_dimensions[14].height = 16
+    
+    # 15행 ~ 13. 알러겐(curr_row-16 위치)까지 14.25 적용
+    dynamic_row = 15
+    while dynamic_row < (last_row - 14):
+        ws.row_dimensions[dynamic_row].height = 14.25
+        dynamic_row += 1
+        
+    # 14. 표시사항 및 하위 공간(15개 행) 높이 순차 적용
+    tail_heights = [16, 16, 16, 16, 30, 20, 15, 15, 15, 15, 15, 15, 15, 15, 15]
+    for h in tail_heights:
+        ws.row_dimensions[dynamic_row].height = h
+        dynamic_row += 1
 
     output = BytesIO()
     wb.save(output)
@@ -228,7 +357,6 @@ text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 �
 if st.button("제품설명서 생성"):
     if uploaded_file and text_input:
         try:
-            # 관공서 다운로드 xls 파일이 내부적으로 HTML 구조를 가지는 경우를 처리
             try:
                 df = pd.read_excel(uploaded_file)
             except ValueError:
