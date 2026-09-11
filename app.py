@@ -89,11 +89,11 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     food_type = info.get('식품의 유형', '')
     is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
     
-    # [수정됨] 식품 유형에 따른 YS-HACCP 텍스트 분기 처리 (유산균음료, 과채음료, 액상차 추가)
+    # 식품 유형에 따른 YS-HACCP 텍스트 분기 처리
     ws.merge_cells('J1:L1')
     if any(x in food_type for x in ['과채주스', '혼합음료', '커피', '유산균음료', '과채음료', '액상차']):
         ws['J1'] = "YS-HACCP(음)"
-    elif '환자용' in food_type:
+    elif '환자용' in food_type or '영양조제식품' in food_type:
         ws['J1'] = "YS-HACCP(환)"
     elif '농후발효유' in food_type or '발효유' in food_type:
         ws['J1'] = "YS-HACCP(발)"
@@ -183,7 +183,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     # 6. 포장단위 (14행)
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # === [수정됨] 7. 완제품의 규격 ===
+    # === 7. 완제품의 규격 ===
     legal_header = "법적규격" 
     
     if is_china_export: 
@@ -253,7 +253,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
         ]
         phys_specs = [("이물", "-", "불검출")]
 
-    elif '환자용' in food_type:
+    elif '환자용' in food_type or '영양조제식품' in food_type:
         bio_specs = [
             ("일반세균(1 ㎖)", "n=5, c=1, m=10, M=100", "음 성"),
             ("대장균군(1 ㎖)", "n=5, c=0, m=0", "음 성"),
@@ -457,7 +457,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "10. 소비기한" if not is_pasteurized else "10. 유통기한", info.get('소비기한', ''))
     curr_row += 1
     
-    # [수정됨] 살균방법 조건 로직 변경
     drink_types = ['과채주스', '혼합음료', '커피', '유산균음료', '과채음료', '액상차']
     
     if ('농후발효유' in food_type or '발효유' in food_type) and not sterilization_val.strip():
@@ -472,7 +471,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     elif '멸균' in sterilization_val:
         if any(x in food_type for x in drink_types):
             sterilization_val = "135~150℃에서 30~37초 동안 멸균"
-        elif '환자용' in food_type:
+        elif '환자용' in food_type or '영양조제식품' in food_type:
             sterilization_val = "143 ~ 153℃에서 3.6 ~ 4.4초간 멸균"
         elif '가공두유' in food_type:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
@@ -492,7 +491,16 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     
     add_row(curr_row, "12. 포장방법 및 재질", info.get('포장단위', ''))
     curr_row += 1
-    add_row(curr_row, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
+    
+    # === [수정됨] 13. 알러겐 주의사항 자동 분기 ===
+    if '가공두유' in food_type:
+        allergen_text = "본 제품은 우유, 알류, 땅콩, 밀, 복숭아, 토마토, 호두, 메밀, 아황산류, 잣을 사용한 제품과 같은 시설에서 제조하고 있습니다. / 대두 함유"
+    elif '환자용' in food_type or '영양조제식품' in food_type:
+        allergen_text = "본 제품은 알류, 땅콩, 밀, 복숭아, 토마토, 호두, 메밀, 아황산류, 잣을 사용한 제품과 같은 시설에서 제조하고 있습니다. / 대두, 우유 함유"
+    else:
+        allergen_text = "본 제품은 대두, 땅콩, 알류, 밀, 복숭아, 토마토, 호두, 메밀, 아황산류, 잣을 사용한 제품과 같은 시설에서 제조하고 있습니다. / 우유 함유"
+        
+    add_row(curr_row, "13. 알러겐 주의사항", allergen_text)
     curr_row += 1
 
     # === 14. 표시사항 (단일 이미지 통채로 병합) ===
