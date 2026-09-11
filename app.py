@@ -8,7 +8,7 @@ import re
 from io import BytesIO
 import datetime
 
-def generate_excel(text_data, excel_df, doc_number, is_china_export, inner_img_file, outer_img_file):
+def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img_file):
     # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
     info = {}
     
@@ -375,29 +375,19 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, inner_img_f
     add_row(curr_row, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
     curr_row += 1
 
-    # === 14. 표시사항 및 이미지 삽입 처리 ===
+    # === [수정됨] 14. 표시사항 (단일 이미지 통채로 병합) ===
     ws.merge_cells(f'A{curr_row}:D{curr_row+14}')
     ws[f'A{curr_row}'] = "14. 표시사항"
 
-    ws.merge_cells(f'E{curr_row}:H{curr_row}')
-    ws[f'E{curr_row}'] = "내포장재"
+    ws.merge_cells(f'E{curr_row}:L{curr_row+14}') # E부터 L까지 통으로 병합
 
-    ws.merge_cells(f'I{curr_row}:L{curr_row}')
-    ws[f'I{curr_row}'] = "외포장재"
-
-    curr_row += 1
-    image_start_row = curr_row
-    ws.merge_cells(f'E{curr_row}:H{curr_row+13}') # 내포장재 공간
-    ws.merge_cells(f'I{curr_row}:L{curr_row+12}') # 외포장재 공간
-
-    # [추가됨] 엑셀 내 이미지 크기 조정 및 삽입
-    if inner_img_file:
-        pil_img = PILImage.open(inner_img_file)
+    if package_img_file:
+        pil_img = PILImage.open(package_img_file)
         ratio = pil_img.width / float(pil_img.height)
-        new_width = 130 # 내포장재 칸 너비 근사치
+        new_width = 400 # E~L 전체 너비 근사치
         new_height = int(new_width / ratio)
-        if new_height > 250: # 병합된 칸의 높이를 초과하지 않도록 제한
-            new_height = 250
+        if new_height > 280: # 병합된 칸의 총 높이를 초과하지 않도록 280px로 제한
+            new_height = 280
             new_width = int(new_height * ratio)
             
         img_byte_arr = BytesIO()
@@ -405,29 +395,9 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, inner_img_f
         opxl_img = OpenpyxlImage(img_byte_arr)
         opxl_img.width = new_width
         opxl_img.height = new_height
-        ws.add_image(opxl_img, f'E{image_start_row}')
+        ws.add_image(opxl_img, f'E{curr_row}')
 
-    if outer_img_file:
-        pil_img = PILImage.open(outer_img_file)
-        ratio = pil_img.width / float(pil_img.height)
-        new_width = 230 # 외포장재 칸 너비 근사치
-        new_height = int(new_width / ratio)
-        if new_height > 230:
-            new_height = 230
-            new_width = int(new_height * ratio)
-            
-        img_byte_arr = BytesIO()
-        pil_img.save(img_byte_arr, format=pil_img.format if pil_img.format else 'PNG')
-        opxl_img = OpenpyxlImage(img_byte_arr)
-        opxl_img.width = new_width
-        opxl_img.height = new_height
-        ws.add_image(opxl_img, f'I{image_start_row}')
-
-    curr_row += 13
-    ws.merge_cells(f'I{curr_row}:L{curr_row}')
-    ws[f'I{curr_row}'] = f"제품명:  {info.get('제품명', '')}"
-    
-    last_row = curr_row
+    last_row = curr_row + 14
 
     # 전체 테두리 지정 및 정렬
     for row in ws.iter_rows(min_row=1, max_row=3, min_col=1, max_col=12):
@@ -488,12 +458,9 @@ with col1:
 with col2:
     is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
 
+# [수정됨] 단일 이미지 업로드로 변경
 st.subheader("2. 표시사항 이미지 업로드 (선택)")
-col3, col4 = st.columns(2)
-with col3:
-    inner_img = st.file_uploader("내포장재 이미지", type=['png', 'jpg', 'jpeg'])
-with col4:
-    outer_img = st.file_uploader("외포장재 이미지", type=['png', 'jpg', 'jpeg'])
+package_img = st.file_uploader("표시사항 이미지 파일", type=['png', 'jpg', 'jpeg'])
 
 st.subheader("3. 품목제조보고 목록 엑셀 파일 업로드")
 uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'])
@@ -509,7 +476,7 @@ if st.button("제품설명서 생성"):
             except ValueError:
                 df = pd.read_html(uploaded_file)[0]
                 
-            excel_data = generate_excel(text_input, df, doc_number, is_china_export, inner_img, outer_img)
+            excel_data = generate_excel(text_input, df, doc_number, is_china_export, package_img)
             
             st.success("제품설명서 생성이 완료되었습니다.")
             st.download_button(
