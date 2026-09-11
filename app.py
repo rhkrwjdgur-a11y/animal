@@ -86,10 +86,19 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ws['F1'].font = Font(size=14, bold=True)
 
     sterilization_val = info.get('살균방법', '')
+    food_type = info.get('식품의 유형', '')
     is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
     
+    # 식품 유형에 따른 YS-HACCP 텍스트 분기 처리
     ws.merge_cells('J1:L1')
-    ws['J1'] = "YS-HACCP(우)" if is_pasteurized else "YS-HACCP(멸균유)"
+    if '농후발효유' in food_type or '발효유' in food_type:
+        ws['J1'] = "YS-HACCP(발)"
+    elif '가공두유' in food_type:
+        ws['J1'] = "YS-HACCP(두)"
+    elif is_pasteurized:
+        ws['J1'] = "YS-HACCP(우)"
+    else:
+        ws['J1'] = "YS-HACCP(멸균유)"
     ws['J1'].alignment = align_center
 
     ws['J2'] = "제정일자"
@@ -171,7 +180,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
     # === 7. 완제품의 규격 ===
-    food_type = info.get('식품의 유형', '')
     legal_header = "법적규격" 
     
     if is_china_export: 
@@ -192,6 +200,34 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             ("총수은(mg/kg)", "0.01이하", "0.01이하"),
             ("총비소(mg/kg)", "0.1이하", "0.1이하"),
             ("크롬(mg/kg)", "0.3이하", "0.3이하")
+        ]
+        phys_specs = [("이물", "불검출", "좌 동")]
+
+    elif '농후발효유' in food_type:
+        bio_specs = [
+            ("효모,곰팡이(4 ㎖)", "-", "음 성"),
+            ("대장균군(1 ㎖)", "n=5, c=2, m=0, M=10", "음 성"),
+            ("유산균수(1 ㎖)", "1억 이상", "1억 이상"),
+            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+        ]
+        chem_specs = [
+            ("무지유고형분(%)", "8.0 이상", "좌 동")
+        ]
+        phys_specs = [("이물", "불검출", "좌 동")]
+
+    elif '발효유' in food_type:
+        bio_specs = [
+            ("효모,곰팡이(4 ㎖)", "-", "음 성"),
+            ("대장균군(1 ㎖)", "n=5, c=2, m=0 M=10", "음 성"),
+            ("유산균수(1 ㎖)", "1,000만 이상", "좌 동"),
+            ("Salmonella spp.", "n=5, c=0, m=0/25g", "좌 동"),
+            ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
+            ("L.monocytogenes", "n=5, c=0, m=0/25g", "좌 동")
+        ]
+        chem_specs = [
+            ("무지유고형분(%)", "3.0이상", "좌 동")
         ]
         phys_specs = [("이물", "불검출", "좌 동")]
         
@@ -242,7 +278,17 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
         phys_specs = [("이물", "불검출", "좌 동")]
         
     else: 
-        if '강화우유' in food_type:
+        if '가공두유' in food_type:
+            bio_specs = [
+                ("세균수", "n=5, c=0, m=0", "음 성"),
+                ("대장균군", "-", "음 성"),
+                ("L.monocytogenes", "-", "n=5, c=0, m=0/25g"),
+                ("장출혈성 대장균", "-", "n=5, c=0, m=0/25g")
+            ]
+            chem_specs = [
+                ("대두고형분(%)", "1.4% 이상", "좌 동")
+            ]
+        elif '강화우유' in food_type:
             bio_specs = [
                 ("세균수(cfu/ml)", "n=5, c=0, m=0", "좌 동"),
                 ("황색포도상구균", "n=5, c=0, m=0/25g", "좌 동"),
@@ -350,13 +396,18 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "10. 소비기한" if not is_pasteurized else "10. 유통기한", info.get('소비기한', ''))
     curr_row += 1
     
-    if is_pasteurized:
+    # 농후발효유 및 발효유 살균방법 공란 처리
+    if ('농후발효유' in food_type or '발효유' in food_type) and not sterilization_val.strip():
+        sterilization_val = "비살균"
+    elif is_pasteurized:
         if '우유' in food_type or '가공유' in food_type or '강화우유' in food_type:
             sterilization_val = "130 ~ 135 ℃에서 2초간 살균"
         else:
             sterilization_val = "130 ~ 135 ℃에서 2초간 살균" 
     elif '멸균' in sterilization_val:
-        if '가공유' in food_type:
+        if '가공두유' in food_type:
+            sterilization_val = "135~150 ℃에서 30~45초간 멸균"
+        elif '가공유' in food_type:
             sterilization_val = "135~150 ℃에서 30~45초간 멸균"
         elif '강화우유' in food_type:
             sterilization_val = "135~150 ℃에서 10~14초간 멸균"
@@ -375,18 +426,18 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "13. 알러겐 주의사항", "본 제품은 알레르기 유발물질을 사용한 제품과 같은 제조시설에서 제조하고 있습니다. (필요 시 수정)")
     curr_row += 1
 
-    # === [수정됨] 14. 표시사항 (단일 이미지 통채로 병합) ===
+    # === 14. 표시사항 (단일 이미지 통채로 병합) ===
     ws.merge_cells(f'A{curr_row}:D{curr_row+14}')
     ws[f'A{curr_row}'] = "14. 표시사항"
 
-    ws.merge_cells(f'E{curr_row}:L{curr_row+14}') # E부터 L까지 통으로 병합
+    ws.merge_cells(f'E{curr_row}:L{curr_row+14}') 
 
     if package_img_file:
         pil_img = PILImage.open(package_img_file)
         ratio = pil_img.width / float(pil_img.height)
-        new_width = 400 # E~L 전체 너비 근사치
+        new_width = 400 
         new_height = int(new_width / ratio)
-        if new_height > 280: # 병합된 칸의 총 높이를 초과하지 않도록 280px로 제한
+        if new_height > 280: 
             new_height = 280
             new_width = int(new_height * ratio)
             
@@ -458,7 +509,6 @@ with col1:
 with col2:
     is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
 
-# [수정됨] 단일 이미지 업로드로 변경
 st.subheader("2. 표시사항 이미지 업로드 (선택)")
 package_img = st.file_uploader("표시사항 이미지 파일", type=['png', 'jpg', 'jpeg'])
 
