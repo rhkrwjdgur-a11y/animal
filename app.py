@@ -7,6 +7,7 @@ from PIL import Image as PILImage
 import re
 from io import BytesIO
 import datetime
+import requests
 
 def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img_file):
     # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
@@ -39,7 +40,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     sterilization_match = re.search(r'살균·멸균\s*([^\n]+)', text_data)
     info['살균방법'] = sterilization_match.group(1).replace("기타", "").strip() if sterilization_match else ""
 
-    # 2. 엑셀 파일(PRDLST_REPORT_LIST)과 매칭하여 추가 정보 추출
+    # 2. 엑셀 파일과 매칭하여 추가 정보 추출
     report_date = ""
     ingredients = ""
     
@@ -54,7 +55,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             
             ingredients = str(matched_row['원재료(배합비)'].values[0])
 
-    # 3. 제품설명서 엑셀 양식 작성 (A~L열 12칸 구조 적용)
+    # 3. 제품설명서 엑셀 양식 작성 (A~L열 12칸 구조)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "제품설명서"
@@ -64,7 +65,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     align_left = Alignment(horizontal='left', vertical='center', wrap_text=True)
     header_fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
-    # 상단 헤더 영역 작성 (1~3행)
     ws.merge_cells('A1:E1')
     ws['A1'] = "연세대학교 연세유업"
     ws['A1'].alignment = align_center
@@ -89,7 +89,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     food_type = info.get('식품의 유형', '')
     is_pasteurized = '살균' in sterilization_val and '멸균' not in sterilization_val
     
-    # 식품 유형에 따른 YS-HACCP 텍스트 분기 처리
     ws.merge_cells('J1:L1')
     if any(x in food_type for x in ['과채주스', '혼합음료', '커피', '유산균음료', '과채음료', '액상차']):
         ws['J1'] = "YS-HACCP(음)"
@@ -117,12 +116,10 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ws['K3'] = "2026년 2월 5일"
     ws['K3'].alignment = align_center
 
-    # 타이틀 (5행)
     ws.merge_cells('A5:L5')
     ws['A5'] = f"{doc_number}) {info.get('제품명', '')}"
     ws['A5'].font = Font(size=12, bold=True)
 
-    # 본문 표 헤더 (7행)
     ws.merge_cells('A7:D7')
     ws['A7'] = "구 분"
     ws['A7'].alignment = align_center
@@ -152,7 +149,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             ws[f'K{row_idx}'] = col4
             ws[f'K{row_idx}'].alignment = align_center
 
-    # 1. 제품명 ~ 4. 작성자 (8~11행)
     add_row(8, "1. 제품명", info.get('제품명', ''), "미출시", "", merge_el=False)
     ws.merge_cells('E8:J8') 
     ws['E8'] = info.get('제품명', '')
@@ -172,7 +168,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     current_date_str = datetime.datetime.now().strftime("%Y년 %m월 %d일")
     add_row(11, "4. 작성자 및 작성 연월일", "식품안전팀 곽정혁", "작성일", current_date_str, merge_el=False)
     
-    # 5. 성분배합비율 (12~13행 병합)
     ws.merge_cells('A12:D13')
     ws['A12'] = "5. 성분배합비율"
     ws['A12'].alignment = align_center
@@ -180,10 +175,9 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ws['E12'] = ingredients
     ws['E12'].alignment = align_left
     
-    # 6. 포장단위 (14행)
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # === 7. 완제품의 규격 ===
+    # 완제품의 규격
     legal_header = "법적규격" 
     
     if is_china_export: 
@@ -449,8 +443,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
         ws[f'K{curr_row}'] = item[2]
         curr_row += 1
 
-    # === [수정됨] 8. 보존기준 ~ 13. 알러겐 ===
-    # 항목들의 행 위치 추적 시작
+    # === 8. 보존기준 ~ 13. 알러겐 ===
     row_item_8 = curr_row
     
     add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '2 ~ 6 ℃에서 냉장보관' if is_pasteurized else '실온보관'))
@@ -542,7 +535,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             if cell.alignment.horizontal is None:
                 cell.alignment = align_center
 
-    # 컬럼 너비 설정
     col_widths = {
         'A': 3.13, 'B': 9, 'C': 9, 'D': 4.5, 
         'E': 3, 'F': 5, 'G': 5, 'H': 7, 
@@ -551,8 +543,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     for col_letter, width_val in col_widths.items():
         ws.column_dimensions[col_letter].width = width_val
 
-    # === [수정됨] 행 높이(Row Heights) 동적 분할 적용 ===
-    # 1. 고정 영역 (1~14행)
+    # === 행 높이(Row Heights) 동적 분할 적용 ===
     ws.row_dimensions[1].height = 25
     ws.row_dimensions[2].height = 25
     ws.row_dimensions[3].height = 25
@@ -566,19 +557,16 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ws.row_dimensions[13].height = 60
     ws.row_dimensions[14].height = 16
     
-    # 2. 동적 규격 영역 (15행 ~ row_item_8 이전)
     for r in range(15, row_item_8):
         ws.row_dimensions[r].height = 14.25
         
-    # 3. 항목 8 ~ 13번 영역 (13번 알러겐만 높이 50으로 설정)
-    ws.row_dimensions[row_item_8].height = 14.25     # 8. 보존기준
-    ws.row_dimensions[row_item_8 + 1].height = 14.25 # 9. 용도용법
-    ws.row_dimensions[row_item_8 + 2].height = 14.25 # 10. 소비기한
-    ws.row_dimensions[row_item_8 + 3].height = 14.25 # 11. 살균방법
-    ws.row_dimensions[row_item_8 + 4].height = 14.25 # 12. 포장방법
-    ws.row_dimensions[row_item_8 + 5].height = 50    # 13. 알러겐 주의사항 (높이 지정)
+    ws.row_dimensions[row_item_8].height = 14.25     
+    ws.row_dimensions[row_item_8 + 1].height = 14.25 
+    ws.row_dimensions[row_item_8 + 2].height = 14.25 
+    ws.row_dimensions[row_item_8 + 3].height = 14.25 
+    ws.row_dimensions[row_item_8 + 4].height = 14.25 
+    ws.row_dimensions[row_item_8 + 5].height = 50    
     
-    # 4. 표시사항 및 하단 여백 (15개 행)
     row_item_14_start = row_item_8 + 6
     tail_heights = [16, 16, 16, 16, 30, 20, 15, 15, 15, 15, 15, 15, 15, 15, 15]
     for i, h in enumerate(tail_heights):
@@ -589,43 +577,159 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     output.seek(0)
     return output
 
-# Streamlit UI 구성
-st.title("제품설명서 자동 생성 시스템")
 
-st.subheader("1. 기본 옵션 설정")
-col1, col2 = st.columns(2)
-with col1:
-    doc_number = st.text_input("문서 번호 입력 (예: 99, 44 등)", value="99")
-with col2:
-    is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
-
-st.subheader("2. 표시사항 이미지 업로드 (선택)")
-package_img = st.file_uploader("표시사항 이미지 파일", type=['png', 'jpg', 'jpeg'])
-
-st.subheader("3. 품목제조보고 목록 엑셀 파일 업로드")
-uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'])
-
-st.subheader("4. 품목제조 기본정보 텍스트 입력")
-text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 붙여넣으세요.", height=200)
-
-if st.button("제품설명서 생성"):
-    if uploaded_file and text_input and doc_number:
-        try:
-            try:
-                df = pd.read_excel(uploaded_file)
-            except ValueError:
-                df = pd.read_html(uploaded_file)[0]
-                
-            excel_data = generate_excel(text_input, df, doc_number, is_china_export, package_img)
+# 갱신 필요 여부 로드 및 비교 함수
+def load_and_concat(files_or_urls):
+    df_list = []
+    for item in files_or_urls:
+        if not item:
+            continue
             
-            st.success("제품설명서 생성이 완료되었습니다.")
-            st.download_button(
-                label="엑셀 파일 다운로드",
-                data=excel_data,
-                file_name=f"제품설명서_자동생성.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        try:
+            if isinstance(item, str) and item.startswith("http"):
+                response = requests.get(item)
+                response.raise_for_status() 
+                try:
+                    df = pd.read_html(response.text)[0]
+                except ValueError:
+                    df = pd.read_excel(BytesIO(response.content))
+            else:
+                try:
+                    df = pd.read_excel(item)
+                except ValueError:
+                    item.seek(0)
+                    df = pd.read_html(item)[0]
+                    
+            if '원재료(배합비)' in df.columns:
+                df.rename(columns={'원재료(배합비)': '원재료'}, inplace=True)
+            elif '원재료명' in df.columns:
+                df.rename(columns={'원재료명': '원재료'}, inplace=True)
+                
+            if '품목보고번호' in df.columns and '제품명' in df.columns and '원재료' in df.columns:
+                df['품목보고번호'] = df['품목보고번호'].astype(str)
+                df_list.append(df[['품목보고번호', '제품명', '원재료']])
         except Exception as e:
-            st.error(f"엑셀 파일 생성 중 오류가 발생했습니다: {e}")
+            st.error(f"데이터 로드 중 오류 발생 ({item}): {e}")
+            
+    if df_list:
+        return pd.concat(df_list).drop_duplicates(subset=['품목보고번호'], keep='last')
     else:
-        st.warning("엑셀 파일, 텍스트 정보, 그리고 문서 번호를 모두 확인해주세요.")
+        return pd.DataFrame()
+
+def compare_ingredients(old_data, new_data):
+    df_old = load_and_concat(old_data)
+    df_new = load_and_concat(new_data)
+    
+    if df_old.empty or df_new.empty:
+        return pd.DataFrame()
+        
+    merged = pd.merge(df_old, df_new, on='품목보고번호', how='right', suffixes=('_기존', '_신규'))
+    
+    # [수정됨] 변경 사항 감지 시 명확한 안내 문구 출력 로직
+    results = []
+    for _, row in merged.iterrows():
+        if pd.isna(row['원재료_기존']):
+            status = "신규 등록"
+            msg = ""
+        elif str(row['원재료_기존']).strip() != str(row['원재료_신규']).strip():
+            status = "갱신 필요 (변경됨)"
+            msg = f"현재 품목제조보고번호 {row['품목보고번호']} 제품명 {row['제품명_신규']} 인 것 원재료명이 {row['원재료_기존']}에서 {row['원재료_신규']}으로 변경 확인되어 제품설명서 최신화 필요합니다."
+        else:
+            status = "변경 없음"
+            msg = ""
+            
+        results.append({
+            '품목보고번호': row['품목보고번호'],
+            '제품명': row['제품명_신규'],
+            '상태': status,
+            '알림 메시지': msg
+        })
+        
+    return pd.DataFrame(results)
+
+
+# Streamlit UI 구성
+st.title("품질안전부문 업무 자동화 시스템")
+
+tab1, tab2 = st.tabs(["📄 제품설명서 자동 생성", "🔄 배합비 갱신 필요 여부 확인"])
+
+with tab1:
+    st.subheader("1. 기본 옵션 설정")
+    col1, col2 = st.columns(2)
+    with col1:
+        doc_number = st.text_input("문서 번호 입력 (예: 99, 44 등)", value="99")
+    with col2:
+        is_china_export = st.checkbox("중국 수출용 (GB 표준) 규격 적용")
+
+    st.subheader("2. 표시사항 이미지 업로드 (선택)")
+    package_img = st.file_uploader("표시사항 이미지 파일", type=['png', 'jpg', 'jpeg'])
+
+    st.subheader("3. 품목제조보고 목록 엑셀 파일 업로드")
+    uploaded_file = st.file_uploader("엑셀 파일 (PRDLST_REPORT_LIST.xls) 업로드", type=['xls', 'xlsx'], key="gen_upload")
+
+    st.subheader("4. 품목제조 기본정보 텍스트 입력")
+    text_input = st.text_area("식품안전나라 등에서 복사한 텍스트를 붙여넣으세요.", height=200)
+
+    if st.button("제품설명서 생성"):
+        if uploaded_file and text_input and doc_number:
+            try:
+                try:
+                    df = pd.read_excel(uploaded_file)
+                except ValueError:
+                    df = pd.read_html(uploaded_file)[0]
+                    
+                excel_data = generate_excel(text_input, df, doc_number, is_china_export, package_img)
+                
+                st.success("제품설명서 생성이 완료되었습니다.")
+                st.download_button(
+                    label="엑셀 파일 다운로드",
+                    data=excel_data,
+                    file_name=f"제품설명서_자동생성.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"엑셀 파일 생성 중 오류가 발생했습니다: {e}")
+        else:
+            st.warning("엑셀 파일, 텍스트 정보, 그리고 문서 번호를 모두 확인해주세요.")
+
+with tab2:
+    st.subheader("원재료명(배합비) 변경 확인 및 갱신 여부 조회")
+    
+    current_date = datetime.datetime.now().strftime("%Y년 %m월 %d일")
+    st.markdown(f"과거에 업로드해둔 기준 데이터와 **오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 비교하여 배합비가 변경된 품목을 찾아냅니다.")
+    
+    col_old, col_new = st.columns(2)
+    with col_old:
+        st.markdown("**[옵션 1] 깃허브(GitHub) Raw URL 입력**")
+        github_urls_text = st.text_area("과거 기준 엑셀 파일 URL (여러 개일 경우 줄바꿈으로 구분)\n* 깃허브에서 파일 클릭 후 'Raw' 버튼을 눌러 나오는 주소를 복사해 주세요.", placeholder="https://raw.githubusercontent.com/...")
+        github_urls = [url.strip() for url in github_urls_text.split('\n') if url.strip()]
+        
+        st.markdown("**[옵션 2] 직접 파일 업로드**")
+        old_files = st.file_uploader("과거 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="old_files")
+        
+        old_data_inputs = github_urls + (old_files if old_files else [])
+        
+    with col_new:
+        st.markdown("**최신(오늘) 기준 데이터 업로드**")
+        new_files = st.file_uploader("최신(오늘) 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
+        
+    if st.button("갱신 필요 여부 확인"):
+        if old_data_inputs and new_files:
+            result_df = compare_ingredients(old_data_inputs, new_files)
+            if not result_df.empty:
+                st.success("배합비 비교가 완료되었습니다.")
+                
+                # 변경된 항목 추출 및 화면 경고 메시지 출력
+                changes = result_df[result_df['상태'] == '갱신 필요 (변경됨)']
+                if not changes.empty:
+                    st.error(f"총 {len(changes)}건의 배합비 변경이 감지되었습니다. 1번 탭에서 최신화 작업을 진행해주세요.")
+                    for idx, row in changes.iterrows():
+                        st.warning(row['알림 메시지'])
+                else:
+                    st.info("배합비가 변경된 품목이 없습니다.")
+                    
+                st.dataframe(result_df.drop(columns=['알림 메시지']))
+            else:
+                st.warning("데이터를 찾을 수 없거나 형식이 일치하지 않습니다.")
+        else:
+            st.warning("비교할 과거 데이터(또는 URL)와 최신 데이터를 모두 입력/업로드해주세요.")
