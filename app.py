@@ -7,14 +7,15 @@ from PIL import Image as PILImage
 import re
 from io import BytesIO
 import datetime
-import requests
+import os
+import glob
 import google.generativeai as genai
 
 # ==========================================
 # 환경 설정 (고정 변수)
 # ==========================================
-# 1. 깃허브 고정 주소 (문법 오류 수정됨)
-GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/Food-Safety/tree/main/새 폴더 (4)"
+# 1. 같은 저장소 내의 기준 데이터 폴더 이름 설정
+BASE_FOLDER_NAME = "새 폴더 (4)"
 
 # 2. Gemini API 키 설정 (Streamlit Secrets 활용)
 try:
@@ -586,61 +587,31 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
 
 
 # ==========================================
-# 2. 갱신 필요 여부 비교 로직 (AI 적용)
+# 2. 갱신 필요 여부 비교 로직 (로컬 폴더 & AI 적용)
 # ==========================================
-def get_github_raw_urls(folder_url):
-    folder_url = folder_url.strip()
-    if not folder_url:
-        return []
-    
-    if "raw.githubusercontent.com" in folder_url:
-        return [folder_url]
-    
-    match_tree = re.search(r"github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.*)", folder_url)
-    match_root = re.search(r"github\.com/([^/]+)/([^/]+)/?$", folder_url)
-    
-    if match_tree:
-        owner, repo, branch, path = match_tree.groups()
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
-    elif match_root:
-        owner, repo = match_root.groups()
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/"
+def get_local_base_files(folder_name):
+    # 지정된 폴더가 존재하면 폴더 안의 엑셀 파일 경로들을 리스트로 반환
+    if os.path.exists(folder_name) and os.path.isdir(folder_name):
+        files = glob.glob(os.path.join(folder_name, "*.xls*"))
+        return files
     else:
         return []
-        
-    try:
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        response = requests.get(api_url, headers=headers)
-        response.raise_for_status()
-        items = response.json()
-        
-        if isinstance(items, dict) and items.get('type') == 'file':
-            items = [items]
-            
-        raw_urls = []
-        for item in items:
-            if item.get('type') == 'file' and item.get('name', '').endswith(('.xls', '.xlsx')):
-                raw_urls.append(item.get('download_url'))
-        return raw_urls
-    except Exception as e:
-        st.error(f"GitHub 폴더 접근 중 오류가 발생했습니다. 저장소가 공개(Public) 상태인지 확인해 주세요. 오류내용: {e}")
-        return []
 
-def load_and_concat(files_or_urls):
+def load_and_concat(files_or_paths):
     df_list = []
-    for item in files_or_urls:
+    for item in files_or_paths:
         if not item:
             continue
             
         try:
-            if isinstance(item, str) and item.startswith("http"):
-                response = requests.get(item)
-                response.raise_for_status() 
+            if isinstance(item, str): 
+                # 로컬 파일 경로인 경우
                 try:
-                    df = pd.read_html(response.text)[0]
+                    df = pd.read_excel(item)
                 except ValueError:
-                    df = pd.read_excel(BytesIO(response.content))
+                    df = pd.read_html(item)[0]
             else:
+                # 사용자가 브라우저에서 직접 업로드한 파일 객체인 경우
                 try:
                     df = pd.read_excel(item)
                 except ValueError:
@@ -786,33 +757,21 @@ with tab2:
     st.subheader("원재료명(배합비) 변경 확인 및 갱신 여부 조회")
     
     current_date = datetime.datetime.now().strftime("%Y년 %m월 %d일")
-    st.markdown(f"과거 기준 데이터와 **오늘 날짜({current_date}) 기준** 데이터를 Gemini AI가 의미적으로 분석하여, 실질적인 배합비 변경이 일어난 품목만 찾아냅니다.")
+    st.markdown(f"**오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 업로드하면, Gemini AI가 저장소의 `새 폴더 (4)` 안의 기준 파일들과 의미적으로 분석 및 대조합니다.")
     
-    col_old, col_new = st.columns(2)
-    with col_old:
-        st.markdown("**[옵션 1] 고정된 GitHub 폴더 자동 스캔**")
-        st.info("소스 코드에 고정된 깃허브 주소를 통해 기준 데이터를 자동으로 불러옵니다.")
-        
-        st.markdown("**[옵션 2] 직접 파일 업로드**")
-        old_files = st.file_uploader("과거 기준 데이터 추가 업로드 (선택)", type=['xls', 'xlsx'], accept_multiple_files=True, key="old_files")
-        
-    with col_new:
-        st.markdown("**최신(오늘) 기준 데이터 업로드**")
-        new_files = st.file_uploader("최신 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
+    new_files = st.file_uploader("최신 기준 데이터 업로드 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
         
     if st.button("AI 갱신 필요 여부 확인"):
-        github_urls = []
-        if GITHUB_FOLDER_URL:
-            with st.spinner('GitHub 폴더 내 엑셀 파일을 스캔 중입니다...'):
-                github_urls = get_github_raw_urls(GITHUB_FOLDER_URL)
-                if github_urls:
-                    st.success(f"GitHub에서 {len(github_urls)}개의 엑셀 파일을 성공적으로 로드했습니다.")
-                
-        old_data_inputs = github_urls + (old_files if old_files else [])
-
-        if old_data_inputs and new_files:
+        # 로컬 폴더(새 폴더 (4)) 안의 파일들을 자동으로 가져옴
+        local_base_files = get_local_base_files(BASE_FOLDER_NAME)
+        
+        if not local_base_files:
+            st.warning(f"기준 데이터를 가져올 수 없습니다. 깃허브 동일 경로에 '{BASE_FOLDER_NAME}' 폴더가 존재하는지 확인해 주세요.")
+        elif not new_files:
+            st.warning("비교할 최신 데이터를 업로드해주세요.")
+        else:
             with st.spinner('배합비 대조 중...'):
-                result_df = compare_ingredients(old_data_inputs, new_files)
+                result_df = compare_ingredients(local_base_files, new_files)
                 
             if not result_df.empty:
                 st.success("AI 배합비 분석이 완료되었습니다.")
@@ -828,5 +787,3 @@ with tab2:
                 st.dataframe(result_df[['품목보고번호', '제품명', '원재료_기존', '원재료_신규', '상태']])
             else:
                 st.warning("데이터를 찾을 수 없거나 형식이 일치하지 않습니다.")
-        else:
-            st.warning("비교할 최신 데이터를 업로드해주세요. (기준 데이터는 GitHub에서 자동 로드됩니다)")
