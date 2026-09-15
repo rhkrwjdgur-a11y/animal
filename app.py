@@ -8,11 +8,25 @@ import re
 from io import BytesIO
 import datetime
 import requests
+import google.generativeai as genai
 
+# ==========================================
+# 환경 설정 (고정 변수)
+# ==========================================
+# 1. 깃허브 고정 주소 (레포지토리명만 실제 이름으로 수정해 주세요)
+GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/[레포지토리명]/tree/main/새 폴더 (4)"
+
+# 2. Gemini API 키 설정 (Streamlit Secrets 활용)
+try:
+    genai.configure(api_key=st.secrets["FOOD_API_KEY"])
+except Exception as e:
+    st.error("Gemini API 키가 Streamlit Secrets에 올바르게 설정되지 않았습니다.")
+
+# ==========================================
+# 1. 제품설명서 자동 생성 로직
+# ==========================================
 def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img_file):
-    # 1. 텍스트 데이터 파싱을 통한 기본 정보 추출
     info = {}
-    
     report_no_match = re.search(r'품목보고번호\s*(\d+)', text_data)
     info['품목보고번호'] = report_no_match.group(1) if report_no_match else ""
     
@@ -40,7 +54,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     sterilization_match = re.search(r'살균·멸균\s*([^\n]+)', text_data)
     info['살균방법'] = sterilization_match.group(1).replace("기타", "").strip() if sterilization_match else ""
 
-    # 2. 엑셀 파일과 매칭하여 추가 정보 추출
     report_date = ""
     ingredients = ""
     
@@ -55,7 +68,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
             
             ingredients = str(matched_row['원재료(배합비)'].values[0])
 
-    # 3. 제품설명서 엑셀 양식 작성 (A~L열 12칸 구조)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "제품설명서"
@@ -177,7 +189,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     
     add_row(14, "6. 포장단위", info.get('포장단위', ''))
 
-    # 완제품의 규격
     legal_header = "법적규격" 
     
     if is_china_export: 
@@ -443,7 +454,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
         ws[f'K{curr_row}'] = item[2]
         curr_row += 1
 
-    # === 8. 보존기준 ~ 13. 알러겐 ===
     row_item_8 = curr_row
     
     add_row(curr_row, "8. 보존기준 및 운송조건", info.get('보존방법', '2 ~ 6 ℃에서 냉장보관' if is_pasteurized else '실온보관'))
@@ -498,7 +508,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     add_row(curr_row, "13. 알러겐 주의사항", allergen_text)
     curr_row += 1
 
-    # === 14. 표시사항 (단일 이미지 통채로 병합) ===
     ws.merge_cells(f'A{curr_row}:D{curr_row+14}')
     ws[f'A{curr_row}'] = "14. 표시사항"
 
@@ -522,7 +531,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
 
     last_row = curr_row + 14
 
-    # 전체 테두리 지정 및 정렬
     for row in ws.iter_rows(min_row=1, max_row=3, min_col=1, max_col=12):
         for cell in row:
             cell.border = border_thin
@@ -543,7 +551,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     for col_letter, width_val in col_widths.items():
         ws.column_dimensions[col_letter].width = width_val
 
-    # === 행 높이(Row Heights) 동적 분할 적용 ===
     ws.row_dimensions[1].height = 25
     ws.row_dimensions[2].height = 25
     ws.row_dimensions[3].height = 25
@@ -578,7 +585,47 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     return output
 
 
-# 갱신 필요 여부 로드 및 비교 함수
+# ==========================================
+# 2. 갱신 필요 여부 비교 로직 (AI 적용)
+# ==========================================
+def get_github_raw_urls(folder_url):
+    folder_url = folder_url.strip()
+    if not folder_url:
+        return []
+    
+    if "raw.githubusercontent.com" in folder_url:
+        return [folder_url]
+    
+    match_tree = re.search(r"github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.*)", folder_url)
+    match_root = re.search(r"github\.com/([^/]+)/([^/]+)/?$", folder_url)
+    
+    if match_tree:
+        owner, repo, branch, path = match_tree.groups()
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
+    elif match_root:
+        owner, repo = match_root.groups()
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/"
+    else:
+        return []
+        
+    try:
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+        items = response.json()
+        
+        if isinstance(items, dict) and items.get('type') == 'file':
+            items = [items]
+            
+        raw_urls = []
+        for item in items:
+            if item.get('type') == 'file' and item.get('name', '').endswith(('.xls', '.xlsx')):
+                raw_urls.append(item.get('download_url'))
+        return raw_urls
+    except Exception as e:
+        st.error(f"GitHub 폴더 접근 중 오류가 발생했습니다. 저장소가 공개(Public) 상태인지 확인해 주세요. 오류내용: {e}")
+        return []
+
 def load_and_concat(files_or_urls):
     df_list = []
     for item in files_or_urls:
@@ -616,6 +663,37 @@ def load_and_concat(files_or_urls):
     else:
         return pd.DataFrame()
 
+# [수정됨] Gemini AI를 활용한 스마트 배합비 대조 로직
+def is_ingredient_changed_ai(old_ing, new_ing):
+    old_str = str(old_ing).strip()
+    new_str = str(new_ing).strip()
+    
+    if old_str == new_str:
+        return False
+        
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        prompt = f"""
+        당신은 식품 배합비 검수 전문가입니다. 아래 두 원재료명 텍스트를 비교하여 실질적인 배합비나 원재료 종류가 변경되었는지 판단하세요.
+        단순한 띄어쓰기, 쉼표, 마침표 등 기호의 차이, 또는 동일한 성분들의 단순 순서 변경은 '변경되지 않음'으로 간주합니다.
+        오직 원재료의 성분이 달라졌거나, 배합 비율(%) 수치가 달라진 경우에만 '변경됨'으로 판단하세요.
+        
+        기존 원재료: {old_str}
+        신규 원재료: {new_str}
+        
+        결과는 반드시 "변경됨" 또는 "변경 안됨" 둘 중 하나로만 대답하세요.
+        """
+        response = model.generate_content(prompt)
+        result_text = response.text.strip()
+        
+        if "변경됨" in result_text and "안됨" not in result_text:
+            return True
+        else:
+            return False
+    except Exception as e:
+        # API 오류 시 기본 텍스트 매칭으로 Fallback
+        return old_str != new_str
+
 def compare_ingredients(old_data, new_data):
     df_old = load_and_concat(old_data)
     df_new = load_and_concat(new_data)
@@ -625,33 +703,48 @@ def compare_ingredients(old_data, new_data):
         
     merged = pd.merge(df_old, df_new, on='품목보고번호', how='right', suffixes=('_기존', '_신규'))
     
-    # [수정됨] 변경 사항 감지 시 명확한 안내 문구 출력 로직
     results = []
-    for _, row in merged.iterrows():
+    
+    # 처리 상황을 보여주는 프로그레스 바
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total_items = len(merged)
+    
+    for i, row in merged.iterrows():
+        status_text.text(f"AI 분석 중... ({i+1}/{total_items}) - {row['제품명_신규']}")
+        
         if pd.isna(row['원재료_기존']):
             status = "신규 등록"
             msg = ""
-        elif str(row['원재료_기존']).strip() != str(row['원재료_신규']).strip():
-            status = "갱신 필요 (변경됨)"
-            msg = f"현재 품목제조보고번호 {row['품목보고번호']} 제품명 {row['제품명_신규']} 인 것 원재료명이 {row['원재료_기존']}에서 {row['원재료_신규']}으로 변경 확인되어 제품설명서 최신화 필요합니다."
         else:
-            status = "변경 없음"
-            msg = ""
+            is_changed = is_ingredient_changed_ai(row['원재료_기존'], row['원재료_신규'])
+            
+            if is_changed:
+                status = "갱신 필요 (변경됨)"
+                msg = f"현재 품목제조보고번호 {row['품목보고번호']} 제품명 {row['제품명_신규']} 인 것 원재료명이 {row['원재료_기존']}에서 {row['원재료_신규']}으로 변경 확인되어 제품설명서 최신화 필요합니다."
+            else:
+                status = "변경 없음"
+                msg = ""
             
         results.append({
             '품목보고번호': row['품목보고번호'],
             '제품명': row['제품명_신규'],
             '상태': status,
-            '알림 메시지': msg
+            '알림 메시지': msg,
+            '원재료_기존': row['원재료_기존'],
+            '원재료_신규': row['원재료_신규']
         })
+        progress_bar.progress((i + 1) / total_items)
         
+    status_text.empty()
+    progress_bar.empty()
     return pd.DataFrame(results)
 
 
 # Streamlit UI 구성
 st.title("품질안전부문 업무 자동화 시스템")
 
-tab1, tab2 = st.tabs(["📄 제품설명서 자동 생성", "🔄 배합비 갱신 필요 여부 확인"])
+tab1, tab2 = st.tabs(["📄 제품설명서 자동 생성", "🔄 배합비 갱신 필요 여부 확인 (AI)"])
 
 with tab1:
     st.subheader("1. 기본 옵션 설정")
@@ -696,40 +789,47 @@ with tab2:
     st.subheader("원재료명(배합비) 변경 확인 및 갱신 여부 조회")
     
     current_date = datetime.datetime.now().strftime("%Y년 %m월 %d일")
-    st.markdown(f"과거에 업로드해둔 기준 데이터와 **오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 비교하여 배합비가 변경된 품목을 찾아냅니다.")
+    st.markdown(f"과거 기준 데이터와 **오늘 날짜({current_date}) 기준** 데이터를 Gemini AI가 의미적으로 분석하여, 실질적인 배합비 변경이 일어난 품목만 찾아냅니다.")
     
     col_old, col_new = st.columns(2)
     with col_old:
-        st.markdown("**[옵션 1] 깃허브(GitHub) Raw URL 입력**")
-        github_urls_text = st.text_area("과거 기준 엑셀 파일 URL (여러 개일 경우 줄바꿈으로 구분)\n* 깃허브에서 파일 클릭 후 'Raw' 버튼을 눌러 나오는 주소를 복사해 주세요.", placeholder="https://raw.githubusercontent.com/...")
-        github_urls = [url.strip() for url in github_urls_text.split('\n') if url.strip()]
+        st.markdown("**[옵션 1] 고정된 GitHub 폴더 자동 스캔**")
+        st.info("소스 코드에 고정된 깃허브 주소를 통해 기준 데이터를 자동으로 불러옵니다.")
         
         st.markdown("**[옵션 2] 직접 파일 업로드**")
-        old_files = st.file_uploader("과거 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="old_files")
-        
-        old_data_inputs = github_urls + (old_files if old_files else [])
+        old_files = st.file_uploader("과거 기준 데이터 추가 업로드 (선택)", type=['xls', 'xlsx'], accept_multiple_files=True, key="old_files")
         
     with col_new:
         st.markdown("**최신(오늘) 기준 데이터 업로드**")
-        new_files = st.file_uploader("최신(오늘) 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
+        new_files = st.file_uploader("최신 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
         
-    if st.button("갱신 필요 여부 확인"):
+    if st.button("AI 갱신 필요 여부 확인"):
+        # 고정된 폴더 URL 처리
+        github_urls = []
+        if GITHUB_FOLDER_URL:
+            with st.spinner('GitHub 폴더 내 엑셀 파일을 스캔 중입니다...'):
+                github_urls = get_github_raw_urls(GITHUB_FOLDER_URL)
+                if github_urls:
+                    st.success(f"GitHub에서 {len(github_urls)}개의 엑셀 파일을 성공적으로 로드했습니다.")
+                
+        old_data_inputs = github_urls + (old_files if old_files else [])
+
         if old_data_inputs and new_files:
             result_df = compare_ingredients(old_data_inputs, new_files)
-            if not result_df.empty:
-                st.success("배합비 비교가 완료되었습니다.")
                 
-                # 변경된 항목 추출 및 화면 경고 메시지 출력
+            if not result_df.empty:
+                st.success("AI 배합비 분석이 완료되었습니다.")
+                
                 changes = result_df[result_df['상태'] == '갱신 필요 (변경됨)']
                 if not changes.empty:
-                    st.error(f"총 {len(changes)}건의 배합비 변경이 감지되었습니다. 1번 탭에서 최신화 작업을 진행해주세요.")
+                    st.error(f"총 {len(changes)}건의 실질적 배합비 변경이 감지되었습니다. 아래 알림을 확인하고 1번 탭에서 최신화 작업을 진행해주세요.")
                     for idx, row in changes.iterrows():
                         st.warning(row['알림 메시지'])
                 else:
-                    st.info("배합비가 변경된 품목이 없습니다.")
+                    st.info("실질적인 배합비가 변경된 품목이 없습니다.")
                     
-                st.dataframe(result_df.drop(columns=['알림 메시지']))
+                st.dataframe(result_df[['품목보고번호', '제품명', '원재료_기존', '원재료_신규', '상태']])
             else:
                 st.warning("데이터를 찾을 수 없거나 형식이 일치하지 않습니다.")
         else:
-            st.warning("비교할 과거 데이터(또는 URL)와 최신 데이터를 모두 입력/업로드해주세요.")
+            st.warning("비교할 최신 데이터를 업로드해주세요. (기준 데이터는 GitHub에서 자동 로드됩니다)")
