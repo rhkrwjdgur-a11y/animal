@@ -13,8 +13,8 @@ import google.generativeai as genai
 # ==========================================
 # 환경 설정 (고정 변수)
 # ==========================================
-# 1. 깃허브 고정 주소 (레포지토리명만 실제 이름으로 수정해 주세요)
-GITHUB_FOLDER_URL = "GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/Food-Safety/tree/main/새 폴더(4)"
+# 1. 깃허브 고정 주소 (문법 오류 수정됨)
+GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/Food-Safety/tree/main/새 폴더 (4)"
 
 # 2. Gemini API 키 설정 (Streamlit Secrets 활용)
 try:
@@ -663,7 +663,6 @@ def load_and_concat(files_or_urls):
     else:
         return pd.DataFrame()
 
-# [수정됨] Gemini AI를 활용한 스마트 배합비 대조 로직
 def is_ingredient_changed_ai(old_ing, new_ing):
     old_str = str(old_ing).strip()
     new_str = str(new_ing).strip()
@@ -691,7 +690,6 @@ def is_ingredient_changed_ai(old_ing, new_ing):
         else:
             return False
     except Exception as e:
-        # API 오류 시 기본 텍스트 매칭으로 Fallback
         return old_str != new_str
 
 def compare_ingredients(old_data, new_data):
@@ -705,7 +703,6 @@ def compare_ingredients(old_data, new_data):
     
     results = []
     
-    # 처리 상황을 보여주는 프로그레스 바
     progress_bar = st.progress(0)
     status_text = st.empty()
     total_items = len(merged)
@@ -804,7 +801,6 @@ with tab2:
         new_files = st.file_uploader("최신 기준 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
         
     if st.button("AI 갱신 필요 여부 확인"):
-        # 고정된 폴더 URL 처리
         github_urls = []
         if GITHUB_FOLDER_URL:
             with st.spinner('GitHub 폴더 내 엑셀 파일을 스캔 중입니다...'):
@@ -815,7 +811,8 @@ with tab2:
         old_data_inputs = github_urls + (old_files if old_files else [])
 
         if old_data_inputs and new_files:
-            result_df = compare_ingredients(old_data_inputs, new_files)
+            with st.spinner('배합비 대조 중...'):
+                result_df = compare_ingredients(old_data_inputs, new_files)
                 
             if not result_df.empty:
                 st.success("AI 배합비 분석이 완료되었습니다.")
