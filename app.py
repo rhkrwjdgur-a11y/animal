@@ -14,7 +14,7 @@ import google.generativeai as genai
 # 환경 설정 (고정 변수)
 # ==========================================
 # 1. 깃허브 고정 주소 (레포지토리명만 실제 이름으로 수정해 주세요)
-GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/[레포지토리명]/tree/main/새 폴더 (4)"
+GITHUB_FOLDER_URL = "GITHUB_FOLDER_URL = "https://github.com/rhkrwjdgur-a11y/Food-Safety/tree/main/새 폴더 (4)"
 
 # 2. Gemini API 키 설정 (Streamlit Secrets 활용)
 try:
