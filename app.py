@@ -9,6 +9,7 @@ from io import BytesIO
 import datetime
 import os
 import glob
+import difflib
 import google.generativeai as genai
 
 # ==========================================
@@ -587,10 +588,9 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
 
 
 # ==========================================
-# 2. 갱신 필요 여부 비교 로직 (로컬 폴더 & AI 적용)
+# 2. 갱신 필요 여부 비교 로직 (로컬 폴더 & AI 적용 & 글자색 하이라이트)
 # ==========================================
 def get_local_base_files(folder_name):
-    # 지정된 폴더가 존재하면 폴더 안의 엑셀 파일 경로들을 리스트로 반환
     if os.path.exists(folder_name) and os.path.isdir(folder_name):
         files = glob.glob(os.path.join(folder_name, "*.xls*"))
         return files
@@ -605,13 +605,11 @@ def load_and_concat(files_or_paths):
             
         try:
             if isinstance(item, str): 
-                # 로컬 파일 경로인 경우
                 try:
                     df = pd.read_excel(item)
                 except ValueError:
                     df = pd.read_html(item)[0]
             else:
-                # 사용자가 브라우저에서 직접 업로드한 파일 객체인 경우
                 try:
                     df = pd.read_excel(item)
                 except ValueError:
@@ -643,7 +641,7 @@ def is_ingredient_changed_ai(old_ing, new_ing):
         
     try:
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"""
+        prompt = f'''
         당신은 식품 배합비 검수 전문가입니다. 아래 두 원재료명 텍스트를 비교하여 실질적인 배합비나 원재료 종류가 변경되었는지 판단하세요.
         단순한 띄어쓰기, 쉼표, 마침표 등 기호의 차이, 또는 동일한 성분들의 단순 순서 변경은 '변경되지 않음'으로 간주합니다.
         오직 원재료의 성분이 달라졌거나, 배합 비율(%) 수치가 달라진 경우에만 '변경됨'으로 판단하세요.
@@ -652,7 +650,7 @@ def is_ingredient_changed_ai(old_ing, new_ing):
         신규 원재료: {new_str}
         
         결과는 반드시 "변경됨" 또는 "변경 안됨" 둘 중 하나로만 대답하세요.
-        """
+        '''
         response = model.generate_content(prompt)
         result_text = response.text.strip()
         
@@ -662,6 +660,30 @@ def is_ingredient_changed_ai(old_ing, new_ing):
             return False
     except Exception as e:
         return old_str != new_str
+
+# [추가됨] 변경된 부분만 다른 색상으로 표시해주는 HTML 생성 함수
+def get_colored_diff(old_text, new_text):
+    matcher = difflib.SequenceMatcher(None, old_text, new_text)
+    old_html = ""
+    new_html = ""
+    
+    for opcode, a0, a1, b0, b1 in matcher.get_opcodes():
+        if opcode == 'equal':
+            old_html += old_text[a0:a1]
+            new_html += new_text[b0:b1]
+        elif opcode == 'insert':
+            # 새로 추가/변경된 부분: 파란색 굵게
+            new_html += f"<span style='color: #0056b3; font-weight: bold; background-color: #e6f2ff;'>{new_text[b0:b1]}</span>"
+        elif opcode == 'delete':
+            # 기존에서 삭제된 부분: 빨간색 취소선
+            old_html += f"<span style='color: #dc3545; font-weight: bold; text-decoration: line-through; background-color: #ffe6e6;'>{old_text[a0:a1]}</span>"
+        elif opcode == 'replace':
+            # 변경된 부분 (삭제 후 추가)
+            old_html += f"<span style='color: #dc3545; font-weight: bold; text-decoration: line-through; background-color: #ffe6e6;'>{old_text[a0:a1]}</span>"
+            new_html += f"<span style='color: #0056b3; font-weight: bold; background-color: #e6f2ff;'>{new_text[b0:b1]}</span>"
+            
+    return old_html, new_html
+
 
 def compare_ingredients(old_data, new_data):
     df_old = load_and_concat(old_data)
@@ -681,26 +703,31 @@ def compare_ingredients(old_data, new_data):
     for i, row in merged.iterrows():
         status_text.text(f"AI 분석 중... ({i+1}/{total_items}) - {row['제품명_신규']}")
         
+        old_str = str(row['원재료_기존']) if not pd.isna(row['원재료_기존']) else ""
+        new_str = str(row['원재료_신규']) if not pd.isna(row['원재료_신규']) else ""
+        
         if pd.isna(row['원재료_기존']):
             status = "신규 등록"
-            msg = ""
+            msg_html = ""
         else:
-            is_changed = is_ingredient_changed_ai(row['원재료_기존'], row['원재료_신규'])
+            is_changed = is_ingredient_changed_ai(old_str, new_str)
             
             if is_changed:
                 status = "갱신 필요 (변경됨)"
-                msg = f"현재 품목제조보고번호 {row['품목보고번호']} 제품명 {row['제품명_신규']} 인 것 원재료명이 {row['원재료_기존']}에서 {row['원재료_신규']}으로 변경 확인되어 제품설명서 최신화 필요합니다."
+                # [수정됨] 변경된 부분 색상 하이라이트 적용된 메시지 생성
+                old_colored, new_colored = get_colored_diff(old_str, new_str)
+                msg_html = f"현재 품목제조보고번호 <b>{row['품목보고번호']}</b> 제품명 <b>{row['제품명_신규']}</b> 인 것 원재료명이<br><br>[기존] {old_colored}<br>에서<br>[신규] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
             else:
                 status = "변경 없음"
-                msg = ""
+                msg_html = ""
             
         results.append({
             '품목보고번호': row['품목보고번호'],
             '제품명': row['제품명_신규'],
             '상태': status,
-            '알림 메시지': msg,
-            '원재료_기존': row['원재료_기존'],
-            '원재료_신규': row['원재료_신규']
+            '알림 메시지': msg_html,
+            '원재료_기존': old_str,
+            '원재료_신규': new_str
         })
         progress_bar.progress((i + 1) / total_items)
         
@@ -757,12 +784,11 @@ with tab2:
     st.subheader("원재료명(배합비) 변경 확인 및 갱신 여부 조회")
     
     current_date = datetime.datetime.now().strftime("%Y년 %m월 %d일")
-    st.markdown(f"**오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 업로드하면, Gemini AI가 저장소의 `새 폴더 (4)` 안의 기준 파일들과 의미적으로 분석 및 대조합니다.")
+    st.markdown(f"**오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 업로드하면, Gemini AI가 저장소의 `{BASE_FOLDER_NAME}` 안의 기준 파일들과 의미적으로 분석 및 대조합니다.")
     
     new_files = st.file_uploader("최신 기준 데이터 업로드 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
         
     if st.button("AI 갱신 필요 여부 확인"):
-        # 로컬 폴더(새 폴더 (4)) 안의 파일들을 자동으로 가져옴
         local_base_files = get_local_base_files(BASE_FOLDER_NAME)
         
         if not local_base_files:
@@ -779,8 +805,14 @@ with tab2:
                 changes = result_df[result_df['상태'] == '갱신 필요 (변경됨)']
                 if not changes.empty:
                     st.error(f"총 {len(changes)}건의 실질적 배합비 변경이 감지되었습니다. 아래 알림을 확인하고 1번 탭에서 최신화 작업을 진행해주세요.")
+                    
+                    # [수정됨] 하이라이트가 적용된 HTML 알림 메시지 출력
                     for idx, row in changes.iterrows():
-                        st.warning(row['알림 메시지'])
+                        st.markdown(f'''
+                        <div style="background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #ffeeba;">
+                            {row['알림 메시지']}
+                        </div>
+                        ''', unsafe_allow_html=True)
                 else:
                     st.info("실질적인 배합비가 변경된 품목이 없습니다.")
                     
