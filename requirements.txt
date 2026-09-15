@@ -5,3 +5,5 @@ lxml
 html5lib
 xlrd>=2.0.1
 Pillow
+requests
+google-generativeai
