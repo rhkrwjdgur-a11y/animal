@@ -647,9 +647,10 @@ def is_ingredient_changed_ai(old_ing, new_ing):
         [중요 검수 규칙]
         1. 단순한 띄어쓰기, 쉼표, 마침표 등 기호의 차이는 무시하세요.
         2. 동일한 성분들의 단순 기재 순서 변경은 무시하세요.
-        3. 품목제조보고서와 제품설명서 간의 **동의어, 한글 라벨링 명칭 차이, 축약어 차이**는 '변경되지 않음'으로 간주하세요. 
-           (예: '액상과당'과 '기타과당', '옥수수기름'과 '옥배유', '비타민C'와 'L-아스코르브산' 등은 서로 같은 것으로 취급합니다.)
-        4. 오직 포함된 원재료의 성분 자체가 완전히 달라졌거나, 배합 비율(%) 수치가 명확히 달라진 경우에만 '변경됨'으로 판단하세요.
+        3. 품목제조보고서와 제품설명서 간의 동의어, 한글 라벨링 명칭 차이, 축약어 차이는 '변경되지 않음'으로 간주하세요. 
+           (예: '액상과당'과 '기타과당', '옥수수기름'과 '옥배유', '비타민C'와 'L-아스코르브산')
+        4. [핵심] 원재료명 뒤에 붙는 괄호 안의 세부 명칭이나 수식어가 생략되거나 추가된 경우 (예: '곡류가공품(17그레인분말)' -> '곡류가공품', '당류가공품(유기농 아가베 시럽)' -> '당류가공품', '향료(천연땅콩향)' -> '향료') 해당 원료의 배합 비율(%) 수치가 같다면 절대 '변경됨'으로 판단하지 마세요.
+        5. 오직 포함된 원재료의 성분 자체가 완전히 삭제/추가되었거나, 배합 비율(%) 수치가 달라진 경우에만 '변경됨'으로 대답하세요.
         
         기존(또는 문서상) 원재료: {old_str}
         신규(최신 DB) 원재료: {new_str}
@@ -731,7 +732,9 @@ def compare_ingredients(old_data, new_data):
     progress_bar.empty()
     return pd.DataFrame(results)
 
-# [추가됨] 3번 탭 전용: 다중 시트 제품설명서 파일 스캔 로직
+# ==========================================
+# 3. 3번 탭 전용: 다중 시트 제품설명서 파일 스캔 로직
+# ==========================================
 def parse_existing_specs_from_workbook(file_obj):
     results = []
     try:
@@ -742,16 +745,13 @@ def parse_existing_specs_from_workbook(file_obj):
             found_product_name = ""
             found_ingredients = ""
             
-            # 동적으로 품목보고번호, 제품명, 성분배합비율 셀의 위치를 찾음
             for row in ws.iter_rows(min_row=1, max_row=20):
                 for cell in row:
                     val = str(cell.value).strip().replace(" ", "") if cell.value else ""
                     if "품목보고번호" in val and not found_report_no:
-                        # 통상적으로 품목보고번호는 같은 행의 K열(11)에 위치함
                         found_report_no = str(ws.cell(row=cell.row, column=11).value).strip()
                         found_report_no = re.sub(r'[^0-9]', '', found_report_no)
                     if "제품명" in val and len(val) < 5 and not found_product_name:
-                        # 통상적으로 제품명 내용은 같은 행의 E열(5)에 위치함
                         found_product_name = str(ws.cell(row=cell.row, column=5).value).strip()
                     if "성분배합비율" in val and not found_ingredients:
                         found_ingredients = str(ws.cell(row=cell.row, column=5).value).strip()
@@ -802,8 +802,8 @@ def check_existing_specs(spec_files, new_data):
             old_colored, new_colored = get_colored_diff(old_str, new_str)
             msg_html = f"기존 문서 <b>{row['파일명']}</b> ({row['제품명_문서']})의 원재료명이<br><br>[기존 문서] {old_colored}<br>에서<br>[최신 기준] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
         else:
-            status = "최신 상태"
-            msg_html = ""
+            status = "적합"
+            msg_html = f"기존 문서 <b>{row['파일명']}</b> ({row['제품명_문서']})은(는) 최신 기준에 맞게 잘 표기되어 있습니다. <b>(적합)</b>"
             
         results.append({
             '파일명': row['파일명'],
@@ -925,6 +925,9 @@ with tab3:
                 st.success("기존 제품설명서 점검이 완료되었습니다.")
                 
                 outdated = check_df[check_df['상태'] == '최신화 필요']
+                valid = check_df[check_df['상태'] == '적합']
+                
+                # 부적합 (빨간색 경고)
                 if not outdated.empty:
                     st.error(f"업로드된 문서 중 총 {len(outdated)}건이 최신 기준과 달라 업데이트가 필요합니다. 알림을 확인하고 1번 탭에서 다시 생성해 주세요.")
                     for idx, row in outdated.iterrows():
@@ -933,8 +936,16 @@ with tab3:
                             {row['알림 메시지']}
                         </div>
                         ''', unsafe_allow_html=True)
-                else:
-                    st.info("업로드하신 모든 제품설명서가 최신 배합비와 일치합니다! (수정 필요 없음)")
+                
+                # 적합 (초록색 알림)
+                if not valid.empty:
+                    st.info(f"총 {len(valid)}건의 문서가 최신 기준에 적합합니다.")
+                    for idx, row in valid.iterrows():
+                        st.markdown(f'''
+                        <div style="background-color: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #c3e6cb;">
+                            {row['알림 메시지']}
+                        </div>
+                        ''', unsafe_allow_html=True)
                     
                 st.dataframe(check_df[['파일명', '품목보고번호', '제품명', '상태']])
         else:
