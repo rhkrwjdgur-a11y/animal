@@ -588,7 +588,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
 
 
 # ==========================================
-# 2. 갱신 필요 여부 비교 로직 (로컬 폴더 & AI 적용 & 글자색 하이라이트)
+# 2. 갱신 필요 여부 로드 함수
 # ==========================================
 def get_local_base_files(folder_name):
     if os.path.exists(folder_name) and os.path.isdir(folder_name):
@@ -661,7 +661,6 @@ def is_ingredient_changed_ai(old_ing, new_ing):
     except Exception as e:
         return old_str != new_str
 
-# [추가됨] 변경된 부분만 다른 색상으로 표시해주는 HTML 생성 함수
 def get_colored_diff(old_text, new_text):
     matcher = difflib.SequenceMatcher(None, old_text, new_text)
     old_html = ""
@@ -672,18 +671,14 @@ def get_colored_diff(old_text, new_text):
             old_html += old_text[a0:a1]
             new_html += new_text[b0:b1]
         elif opcode == 'insert':
-            # 새로 추가/변경된 부분: 파란색 굵게
             new_html += f"<span style='color: #0056b3; font-weight: bold; background-color: #e6f2ff;'>{new_text[b0:b1]}</span>"
         elif opcode == 'delete':
-            # 기존에서 삭제된 부분: 빨간색 취소선
             old_html += f"<span style='color: #dc3545; font-weight: bold; text-decoration: line-through; background-color: #ffe6e6;'>{old_text[a0:a1]}</span>"
         elif opcode == 'replace':
-            # 변경된 부분 (삭제 후 추가)
             old_html += f"<span style='color: #dc3545; font-weight: bold; text-decoration: line-through; background-color: #ffe6e6;'>{old_text[a0:a1]}</span>"
             new_html += f"<span style='color: #0056b3; font-weight: bold; background-color: #e6f2ff;'>{new_text[b0:b1]}</span>"
             
     return old_html, new_html
-
 
 def compare_ingredients(old_data, new_data):
     df_old = load_and_concat(old_data)
@@ -695,14 +690,12 @@ def compare_ingredients(old_data, new_data):
     merged = pd.merge(df_old, df_new, on='품목보고번호', how='right', suffixes=('_기존', '_신규'))
     
     results = []
-    
     progress_bar = st.progress(0)
     status_text = st.empty()
     total_items = len(merged)
     
     for i, row in merged.iterrows():
         status_text.text(f"AI 분석 중... ({i+1}/{total_items}) - {row['제품명_신규']}")
-        
         old_str = str(row['원재료_기존']) if not pd.isna(row['원재료_기존']) else ""
         new_str = str(row['원재료_신규']) if not pd.isna(row['원재료_신규']) else ""
         
@@ -711,12 +704,10 @@ def compare_ingredients(old_data, new_data):
             msg_html = ""
         else:
             is_changed = is_ingredient_changed_ai(old_str, new_str)
-            
             if is_changed:
                 status = "갱신 필요 (변경됨)"
-                # [수정됨] 변경된 부분 색상 하이라이트 적용된 메시지 생성
                 old_colored, new_colored = get_colored_diff(old_str, new_str)
-                msg_html = f"현재 품목제조보고번호 <b>{row['품목보고번호']}</b> 제품명 <b>{row['제품명_신규']}</b> 인 것 원재료명이<br><br>[기존] {old_colored}<br>에서<br>[신규] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
+                msg_html = f"현재 품목제조보고번호 <b>{row['품목보고번호']}</b> 제품명 <b>{row['제품명_신규']}</b> 인 것 원재료명이<br><br>[기준 DB] {old_colored}<br>에서<br>[최신 DB] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
             else:
                 status = "변경 없음"
                 msg_html = ""
@@ -735,11 +726,89 @@ def compare_ingredients(old_data, new_data):
     progress_bar.empty()
     return pd.DataFrame(results)
 
+# ==========================================
+# 3. 기존 제품설명서 분석 로직 (신규 탭)
+# ==========================================
+def parse_existing_spec(file_obj):
+    try:
+        wb = openpyxl.load_workbook(file_obj, data_only=True)
+        ws = wb.active
+        
+        report_no = str(ws['K10'].value).strip() if ws['K10'].value else ""
+        product_name = str(ws['E8'].value).strip() if ws['E8'].value else ""
+        ingredients = str(ws['E12'].value).strip() if ws['E12'].value else ""
+        
+        # 품목보고번호 숫자만 추출
+        report_no = re.sub(r'[^0-9]', '', report_no)
+        
+        return {
+            '파일명': file_obj.name,
+            '품목보고번호': report_no,
+            '제품명_문서': product_name,
+            '원재료_문서': ingredients
+        }
+    except Exception as e:
+        st.error(f"{file_obj.name} 파일 분석 중 오류가 발생했습니다: {e}")
+        return None
 
+def check_existing_specs(spec_files, new_data):
+    df_new = load_and_concat(new_data)
+    if df_new.empty:
+        return pd.DataFrame()
+
+    parsed_data = []
+    for f in spec_files:
+        parsed = parse_existing_spec(f)
+        if parsed and parsed['품목보고번호']:
+            parsed_data.append(parsed)
+            
+    if not parsed_data:
+        st.warning("업로드된 제품설명서에서 유효한 데이터를 찾지 못했습니다.")
+        return pd.DataFrame()
+        
+    df_specs = pd.DataFrame(parsed_data)
+    merged = pd.merge(df_specs, df_new, on='품목보고번호', how='inner')
+    
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total_items = len(merged)
+    
+    for i, row in merged.iterrows():
+        status_text.text(f"기존 문서 점검 중... ({i+1}/{total_items}) - {row['파일명']}")
+        
+        old_str = str(row['원재료_문서']).strip()
+        new_str = str(row['원재료']).strip()
+        
+        is_changed = is_ingredient_changed_ai(old_str, new_str)
+        if is_changed:
+            status = "최신화 필요"
+            old_colored, new_colored = get_colored_diff(old_str, new_str)
+            msg_html = f"기존 문서 <b>{row['파일명']}</b> ({row['제품명_문서']})의 원재료명이<br><br>[기존 문서] {old_colored}<br>에서<br>[최신 기준] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
+        else:
+            status = "최신 상태"
+            msg_html = ""
+            
+        results.append({
+            '파일명': row['파일명'],
+            '품목보고번호': row['품목보고번호'],
+            '제품명': row['제품명_문서'],
+            '상태': status,
+            '알림 메시지': msg_html
+        })
+        progress_bar.progress((i + 1) / total_items)
+        
+    status_text.empty()
+    progress_bar.empty()
+    return pd.DataFrame(results)
+
+
+# ==========================================
 # Streamlit UI 구성
+# ==========================================
 st.title("품질안전부문 업무 자동화 시스템")
 
-tab1, tab2 = st.tabs(["📄 제품설명서 자동 생성", "🔄 배합비 갱신 필요 여부 확인 (AI)"])
+tab1, tab2, tab3 = st.tabs(["📄 제품설명서 자동 생성", "🔄 기준 데이터 배합비 변경 확인", "🔎 기존 제품설명서 최신화 점검"])
 
 with tab1:
     st.subheader("1. 기본 옵션 설정")
@@ -786,27 +855,26 @@ with tab2:
     current_date = datetime.datetime.now().strftime("%Y년 %m월 %d일")
     st.markdown(f"**오늘 날짜({current_date}) 기준**으로 새로 확보한 데이터를 업로드하면, Gemini AI가 저장소의 `{BASE_FOLDER_NAME}` 안의 기준 파일들과 의미적으로 분석 및 대조합니다.")
     
-    new_files = st.file_uploader("최신 기준 데이터 업로드 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files")
+    new_files_tab2 = st.file_uploader("최신 기준 데이터 업로드 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_files_tab2")
         
-    if st.button("AI 갱신 필요 여부 확인"):
+    if st.button("AI 갱신 필요 여부 확인 (기준DB 대조)"):
         local_base_files = get_local_base_files(BASE_FOLDER_NAME)
         
         if not local_base_files:
             st.warning(f"기준 데이터를 가져올 수 없습니다. 깃허브 동일 경로에 '{BASE_FOLDER_NAME}' 폴더가 존재하는지 확인해 주세요.")
-        elif not new_files:
+        elif not new_files_tab2:
             st.warning("비교할 최신 데이터를 업로드해주세요.")
         else:
             with st.spinner('배합비 대조 중...'):
-                result_df = compare_ingredients(local_base_files, new_files)
+                result_df = compare_ingredients(local_base_files, new_files_tab2)
                 
             if not result_df.empty:
                 st.success("AI 배합비 분석이 완료되었습니다.")
                 
                 changes = result_df[result_df['상태'] == '갱신 필요 (변경됨)']
                 if not changes.empty:
-                    st.error(f"총 {len(changes)}건의 실질적 배합비 변경이 감지되었습니다. 아래 알림을 확인하고 1번 탭에서 최신화 작업을 진행해주세요.")
+                    st.error(f"총 {len(changes)}건의 실질적 배합비 변경이 감지되었습니다.")
                     
-                    # [수정됨] 하이라이트가 적용된 HTML 알림 메시지 출력
                     for idx, row in changes.iterrows():
                         st.markdown(f'''
                         <div style="background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #ffeeba;">
@@ -819,3 +887,39 @@ with tab2:
                 st.dataframe(result_df[['품목보고번호', '제품명', '원재료_기존', '원재료_신규', '상태']])
             else:
                 st.warning("데이터를 찾을 수 없거나 형식이 일치하지 않습니다.")
+
+with tab3:
+    st.subheader("기존에 작성된 제품설명서 최신화 점검")
+    st.markdown("기존에 만들어둔 **'제품설명서 엑셀 파일'**들을 올리고, 오늘 기준 **'최신 품목제조보고 목록'**과 대조하여 최신화(갱신)가 필요한 문서를 색출합니다.")
+    
+    col_spec, col_ref = st.columns(2)
+    with col_spec:
+        st.markdown("**기존 제품설명서 업로드**")
+        spec_files = st.file_uploader("제품설명서 엑셀 파일 (다중 선택 가능)", type=['xlsx'], accept_multiple_files=True, key="spec_files")
+    with col_ref:
+        st.markdown("**최신 기준 데이터 업로드**")
+        new_ref_files = st.file_uploader("최신 품목제조보고 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_ref_files")
+
+    if st.button("문서 최신화 점검 시작"):
+        if spec_files and new_ref_files:
+            with st.spinner('문서 내 데이터 추출 및 AI 대조 중...'):
+                check_df = check_existing_specs(spec_files, new_ref_files)
+                
+            if not check_df.empty:
+                st.success("기존 제품설명서 점검이 완료되었습니다.")
+                
+                outdated = check_df[check_df['상태'] == '최신화 필요']
+                if not outdated.empty:
+                    st.error(f"업로드된 문서 중 총 {len(outdated)}건이 최신 기준과 달라 업데이트가 필요합니다. 1번 탭에서 다시 생성해 주세요.")
+                    for idx, row in outdated.iterrows():
+                        st.markdown(f'''
+                        <div style="background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #f5c6cb;">
+                            {row['알림 메시지']}
+                        </div>
+                        ''', unsafe_allow_html=True)
+                else:
+                    st.info("업로드하신 모든 제품설명서가 최신 배합비와 일치합니다! (수정 필요 없음)")
+                    
+                st.dataframe(check_df[['파일명', '품목보고번호', '제품명', '상태']])
+        else:
+            st.warning("점검할 '기존 제품설명서'와 대조할 '최신 기준 데이터'를 모두 업로드해주세요.")
