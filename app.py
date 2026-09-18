@@ -588,7 +588,7 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
 
 
 # ==========================================
-# 2. 갱신 필요 여부 로드 함수
+# 2 & 3. 갱신 여부 점검 공통 함수 (AI 적용)
 # ==========================================
 def get_local_base_files(folder_name):
     if os.path.exists(folder_name) and os.path.isdir(folder_name):
@@ -642,12 +642,17 @@ def is_ingredient_changed_ai(old_ing, new_ing):
     try:
         model = genai.GenerativeModel('gemini-pro')
         prompt = f'''
-        당신은 식품 배합비 검수 전문가입니다. 아래 두 원재료명 텍스트를 비교하여 실질적인 배합비나 원재료 종류가 변경되었는지 판단하세요.
-        단순한 띄어쓰기, 쉼표, 마침표 등 기호의 차이, 또는 동일한 성분들의 단순 순서 변경은 '변경되지 않음'으로 간주합니다.
-        오직 원재료의 성분이 달라졌거나, 배합 비율(%) 수치가 달라진 경우에만 '변경됨'으로 판단하세요.
+        당신은 식품 배합비 검수 전문가입니다. 아래 두 원재료명 텍스트를 비교하여 실질적인 배합비(%)나 핵심 원재료가 변경되었는지 판단하세요.
         
-        기존 원재료: {old_str}
-        신규 원재료: {new_str}
+        [중요 검수 규칙]
+        1. 단순한 띄어쓰기, 쉼표, 마침표 등 기호의 차이는 무시하세요.
+        2. 동일한 성분들의 단순 기재 순서 변경은 무시하세요.
+        3. 품목제조보고서와 제품설명서 간의 **동의어, 한글 라벨링 명칭 차이, 축약어 차이**는 '변경되지 않음'으로 간주하세요. 
+           (예: '액상과당'과 '기타과당', '옥수수기름'과 '옥배유', '비타민C'와 'L-아스코르브산' 등은 서로 같은 것으로 취급합니다.)
+        4. 오직 포함된 원재료의 성분 자체가 완전히 달라졌거나, 배합 비율(%) 수치가 명확히 달라진 경우에만 '변경됨'으로 판단하세요.
+        
+        기존(또는 문서상) 원재료: {old_str}
+        신규(최신 DB) 원재료: {new_str}
         
         결과는 반드시 "변경됨" 또는 "변경 안됨" 둘 중 하나로만 대답하세요.
         '''
@@ -726,30 +731,42 @@ def compare_ingredients(old_data, new_data):
     progress_bar.empty()
     return pd.DataFrame(results)
 
-# ==========================================
-# 3. 기존 제품설명서 분석 로직 (신규 탭)
-# ==========================================
-def parse_existing_spec(file_obj):
+# [추가됨] 3번 탭 전용: 다중 시트 제품설명서 파일 스캔 로직
+def parse_existing_specs_from_workbook(file_obj):
+    results = []
     try:
         wb = openpyxl.load_workbook(file_obj, data_only=True)
-        ws = wb.active
-        
-        report_no = str(ws['K10'].value).strip() if ws['K10'].value else ""
-        product_name = str(ws['E8'].value).strip() if ws['E8'].value else ""
-        ingredients = str(ws['E12'].value).strip() if ws['E12'].value else ""
-        
-        # 품목보고번호 숫자만 추출
-        report_no = re.sub(r'[^0-9]', '', report_no)
-        
-        return {
-            '파일명': file_obj.name,
-            '품목보고번호': report_no,
-            '제품명_문서': product_name,
-            '원재료_문서': ingredients
-        }
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            found_report_no = ""
+            found_product_name = ""
+            found_ingredients = ""
+            
+            # 동적으로 품목보고번호, 제품명, 성분배합비율 셀의 위치를 찾음
+            for row in ws.iter_rows(min_row=1, max_row=20):
+                for cell in row:
+                    val = str(cell.value).strip().replace(" ", "") if cell.value else ""
+                    if "품목보고번호" in val and not found_report_no:
+                        # 통상적으로 품목보고번호는 같은 행의 K열(11)에 위치함
+                        found_report_no = str(ws.cell(row=cell.row, column=11).value).strip()
+                        found_report_no = re.sub(r'[^0-9]', '', found_report_no)
+                    if "제품명" in val and len(val) < 5 and not found_product_name:
+                        # 통상적으로 제품명 내용은 같은 행의 E열(5)에 위치함
+                        found_product_name = str(ws.cell(row=cell.row, column=5).value).strip()
+                    if "성분배합비율" in val and not found_ingredients:
+                        found_ingredients = str(ws.cell(row=cell.row, column=5).value).strip()
+                        
+            if found_report_no:
+                results.append({
+                    '파일명': f"{file_obj.name} [{sheet_name} 시트]",
+                    '품목보고번호': found_report_no,
+                    '제품명_문서': found_product_name,
+                    '원재료_문서': found_ingredients
+                })
+        return results
     except Exception as e:
         st.error(f"{file_obj.name} 파일 분석 중 오류가 발생했습니다: {e}")
-        return None
+        return []
 
 def check_existing_specs(spec_files, new_data):
     df_new = load_and_concat(new_data)
@@ -758,9 +775,8 @@ def check_existing_specs(spec_files, new_data):
 
     parsed_data = []
     for f in spec_files:
-        parsed = parse_existing_spec(f)
-        if parsed and parsed['품목보고번호']:
-            parsed_data.append(parsed)
+        parsed_list = parse_existing_specs_from_workbook(f)
+        parsed_data.extend(parsed_list)
             
     if not parsed_data:
         st.warning("업로드된 제품설명서에서 유효한 데이터를 찾지 못했습니다.")
@@ -890,19 +906,19 @@ with tab2:
 
 with tab3:
     st.subheader("기존에 작성된 제품설명서 최신화 점검")
-    st.markdown("기존에 만들어둔 **'제품설명서 엑셀 파일'**들을 올리고, 오늘 기준 **'최신 품목제조보고 목록'**과 대조하여 최신화(갱신)가 필요한 문서를 색출합니다.")
+    st.markdown("기존에 만들어둔 **'다중 시트 제품설명서 엑셀 파일'**들을 올리고, 오늘 기준 **'최신 품목제조보고 목록'**과 대조하여 최신화(갱신)가 필요한 문서를 색출합니다.")
     
     col_spec, col_ref = st.columns(2)
     with col_spec:
         st.markdown("**기존 제품설명서 업로드**")
-        spec_files = st.file_uploader("제품설명서 엑셀 파일 (다중 선택 가능)", type=['xlsx'], accept_multiple_files=True, key="spec_files")
+        spec_files = st.file_uploader("제품설명서 엑셀 파일 (다중 시트 포함, 복수 선택 가능)", type=['xlsx'], accept_multiple_files=True, key="spec_files")
     with col_ref:
         st.markdown("**최신 기준 데이터 업로드**")
         new_ref_files = st.file_uploader("최신 품목제조보고 데이터 (일반식품, 축산물 등)", type=['xls', 'xlsx'], accept_multiple_files=True, key="new_ref_files")
 
     if st.button("문서 최신화 점검 시작"):
         if spec_files and new_ref_files:
-            with st.spinner('문서 내 데이터 추출 및 AI 대조 중...'):
+            with st.spinner('문서 내 데이터 전체 추출 및 AI 대조 중...'):
                 check_df = check_existing_specs(spec_files, new_ref_files)
                 
             if not check_df.empty:
@@ -910,7 +926,7 @@ with tab3:
                 
                 outdated = check_df[check_df['상태'] == '최신화 필요']
                 if not outdated.empty:
-                    st.error(f"업로드된 문서 중 총 {len(outdated)}건이 최신 기준과 달라 업데이트가 필요합니다. 1번 탭에서 다시 생성해 주세요.")
+                    st.error(f"업로드된 문서 중 총 {len(outdated)}건이 최신 기준과 달라 업데이트가 필요합니다. 알림을 확인하고 1번 탭에서 다시 생성해 주세요.")
                     for idx, row in outdated.iterrows():
                         st.markdown(f'''
                         <div style="background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #f5c6cb;">
