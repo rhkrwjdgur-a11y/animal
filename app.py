@@ -60,15 +60,25 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ingredients = ""
     
     if info['품목보고번호'] and not excel_df.empty:
+        # 컬럼 이름 정규화 (유통기한, 소비기한 등) 처리 후 매칭
+        col_map = {}
+        for col in excel_df.columns:
+            col_str = str(col).strip()
+            if '원재료' in col_str or '배합비' in col_str:
+                col_map[col] = '원재료'
+        excel_df.rename(columns=col_map, inplace=True)
+        
         excel_df['품목보고번호'] = excel_df['품목보고번호'].astype(str)
         matched_row = excel_df[excel_df['품목보고번호'] == info['품목보고번호']]
         
         if not matched_row.empty:
-            report_date_raw = str(matched_row['신(보)고일자'].values[0])
-            if len(report_date_raw) >= 10:
-                report_date = f"{report_date_raw[:4]}년 {report_date_raw[5:7]}월 {report_date_raw[8:10]}일"
+            if '신(보)고일자' in matched_row.columns:
+                report_date_raw = str(matched_row['신(보)고일자'].values[0])
+                if len(report_date_raw) >= 10:
+                    report_date = f"{report_date_raw[:4]}년 {report_date_raw[5:7]}월 {report_date_raw[8:10]}일"
             
-            ingredients = str(matched_row['원재료(배합비)'].values[0])
+            if '원재료' in matched_row.columns:
+                ingredients = str(matched_row['원재료'].values[0])
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -616,14 +626,23 @@ def load_and_concat(files_or_paths):
                     item.seek(0)
                     df = pd.read_html(item)[0]
                     
-            if '원재료(배합비)' in df.columns:
-                df.rename(columns={'원재료(배합비)': '원재료'}, inplace=True)
-            elif '원재료명' in df.columns:
-                df.rename(columns={'원재료명': '원재료'}, inplace=True)
+            # 1. 컬럼명 정규화 (제품명, 소비기한, 원재료)
+            col_map = {}
+            for col in df.columns:
+                col_str = str(col).strip()
+                if '원재료' in col_str or '배합비' in col_str:
+                    col_map[col] = '원재료'
+                elif '유통' in col_str or '소비' in col_str or '기한' in col_str:
+                    if '유통/소비기한' in col_str or '유통기한' in col_str or '소비기한' in col_str:
+                        col_map[col] = '소비기한'
+            df.rename(columns=col_map, inplace=True)
+            
+            if '소비기한' not in df.columns:
+                df['소비기한'] = ""
                 
             if '품목보고번호' in df.columns and '제품명' in df.columns and '원재료' in df.columns:
                 df['품목보고번호'] = df['품목보고번호'].astype(str)
-                df_list.append(df[['품목보고번호', '제품명', '원재료']])
+                df_list.append(df[['품목보고번호', '제품명', '소비기한', '원재료']])
         except Exception as e:
             st.error(f"데이터 로드 중 오류 발생 ({item}): {e}")
             
@@ -632,7 +651,6 @@ def load_and_concat(files_or_paths):
     else:
         return pd.DataFrame()
 
-# [수정됨] Few-shot Prompting이 적용된 스마트 검수 로직
 def is_ingredient_changed_ai(old_ing, new_ing):
     old_str = str(old_ing).strip()
     new_str = str(new_ing).strip()
@@ -704,14 +722,11 @@ def get_colored_diff(old_text, new_text):
             
     return old_html, new_html
 
-def compare_ingredients(old_data, new_data):
-    df_old = load_and_concat(old_data)
-    df_new = load_and_concat(new_data)
-    
+def compare_product_data(df_old, df_new, is_tab3=False):
     if df_old.empty or df_new.empty:
         return pd.DataFrame()
         
-    merged = pd.merge(df_old, df_new, on='품목보고번호', how='right', suffixes=('_기존', '_신규'))
+    merged = pd.merge(df_old, df_new, on='품목보고번호', how='inner' if is_tab3 else 'right', suffixes=('_기존', '_신규'))
     
     results = []
     progress_bar = st.progress(0)
@@ -719,31 +734,63 @@ def compare_ingredients(old_data, new_data):
     total_items = len(merged)
     
     for i, row in merged.iterrows():
-        status_text.text(f"AI 분석 중... ({i+1}/{total_items}) - {row['제품명_신규']}")
-        old_str = str(row['원재료_기존']) if not pd.isna(row['원재료_기존']) else ""
-        new_str = str(row['원재료_신규']) if not pd.isna(row['원재료_신규']) else ""
+        status_text.text(f"항목 대조 중... ({i+1}/{total_items}) - {row.get('제품명_신규', row.get('제품명', '알수없음'))}")
         
-        if pd.isna(row['원재료_기존']):
+        # 1. 제품명 비교
+        name_old = str(row['제품명_문서'] if is_tab3 else row['제품명_기존']).strip()
+        name_new = str(row['제품명'] if is_tab3 else row['제품명_신규']).strip()
+        name_changed = (name_old != name_new and not pd.isna(row['제품명_기존'] if not is_tab3 else row['제품명_문서']))
+
+        # 2. 소비기한 비교
+        expire_old = str(row['소비기한_문서'] if is_tab3 else row['소비기한_기존']).strip()
+        expire_new = str(row['소비기한'] if is_tab3 else row['소비기한_신규']).strip()
+        expire_changed = (expire_old != expire_new and expire_old != "" and expire_new != "" and not pd.isna(row['소비기한_기존'] if not is_tab3 else row['소비기한_문서']))
+
+        # 3. 원재료 비교 (AI)
+        ing_old = str(row['원재료_문서'] if is_tab3 else row['원재료_기존']).strip()
+        ing_new = str(row['원재료'] if is_tab3 else row['원재료_신규']).strip()
+        ing_changed = False
+        
+        if pd.isna(row['원재료_기존'] if not is_tab3 else row['원재료_문서']):
             status = "신규 등록"
             msg_html = ""
         else:
-            is_changed = is_ingredient_changed_ai(old_str, new_str)
-            if is_changed:
-                status = "갱신 필요 (변경됨)"
-                old_colored, new_colored = get_colored_diff(old_str, new_str)
-                msg_html = f"현재 품목제조보고번호 <b>{row['품목보고번호']}</b> 제품명 <b>{row['제품명_신규']}</b> 인 것 원재료명이<br><br>[기준 DB] {old_colored}<br>에서<br>[최신 DB] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
-            else:
-                status = "변경 없음"
-                msg_html = ""
+            ing_changed = is_ingredient_changed_ai(ing_old, ing_new)
             
-        results.append({
+            if name_changed or expire_changed or ing_changed:
+                status = "최신화 필요" if is_tab3 else "갱신 필요 (변경됨)"
+                msg_parts = []
+                
+                doc_name = f"기존 문서 <b>{row.get('파일명', '')}</b> ({name_old})" if is_tab3 else f"현재 품목제조보고번호 <b>{row['품목보고번호']}</b> 제품명 <b>{name_new}</b>"
+                msg_parts.append(f"{doc_name} 항목에 다음 변경점이 감지되어 최신화가 필요합니다.<br>")
+                
+                if name_changed:
+                    o_c, n_c = get_colored_diff(name_old, name_new)
+                    msg_parts.append(f"<br><b>[제품명 변경]</b><br>[기존] {o_c}<br>[최신] {n_c}")
+                
+                if expire_changed:
+                    o_c, n_c = get_colored_diff(expire_old, expire_new)
+                    msg_parts.append(f"<br><b>[소비기한 변경]</b><br>[기존] {o_c}<br>[최신] {n_c}")
+                    
+                if ing_changed:
+                    o_c, n_c = get_colored_diff(ing_old, ing_new)
+                    msg_parts.append(f"<br><b>[원재료/배합비 변경]</b><br>[기존] {o_c}<br>[최신] {n_c}")
+                    
+                msg_html = "".join(msg_parts)
+            else:
+                status = "적합" if is_tab3 else "변경 없음"
+                msg_html = f"기존 문서 <b>{row.get('파일명', '')}</b> ({name_old})은(는) 최신 기준에 맞게 잘 표기되어 있습니다. <b>(적합)</b>" if is_tab3 else ""
+            
+        result_dict = {
             '품목보고번호': row['품목보고번호'],
-            '제품명': row['제품명_신규'],
+            '제품명': name_old if is_tab3 else name_new,
             '상태': status,
-            '알림 메시지': msg_html,
-            '원재료_기존': old_str,
-            '원재료_신규': new_str
-        })
+            '알림 메시지': msg_html
+        }
+        if is_tab3:
+            result_dict['파일명'] = row['파일명']
+            
+        results.append(result_dict)
         progress_bar.progress((i + 1) / total_items)
         
     status_text.empty()
@@ -762,8 +809,9 @@ def parse_existing_specs_from_workbook(file_obj):
             found_report_no = ""
             found_product_name = ""
             found_ingredients = ""
+            found_expire = ""
             
-            for row in ws.iter_rows(min_row=1, max_row=20):
+            for row in ws.iter_rows(min_row=1, max_row=50):
                 for cell in row:
                     val = str(cell.value).strip().replace(" ", "") if cell.value else ""
                     if "품목보고번호" in val and not found_report_no:
@@ -773,12 +821,15 @@ def parse_existing_specs_from_workbook(file_obj):
                         found_product_name = str(ws.cell(row=cell.row, column=5).value).strip()
                     if "성분배합비율" in val and not found_ingredients:
                         found_ingredients = str(ws.cell(row=cell.row, column=5).value).strip()
+                    if ("소비기한" in val or "유통기한" in val) and len(val) < 10 and not found_expire:
+                        found_expire = str(ws.cell(row=cell.row, column=5).value).strip()
                         
             if found_report_no:
                 results.append({
                     '파일명': f"{file_obj.name} [{sheet_name} 시트]",
                     '품목보고번호': found_report_no,
                     '제품명_문서': found_product_name,
+                    '소비기한_문서': found_expire,
                     '원재료_문서': found_ingredients
                 })
         return results
@@ -801,40 +852,7 @@ def check_existing_specs(spec_files, new_data):
         return pd.DataFrame()
         
     df_specs = pd.DataFrame(parsed_data)
-    merged = pd.merge(df_specs, df_new, on='품목보고번호', how='inner')
-    
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_items = len(merged)
-    
-    for i, row in merged.iterrows():
-        status_text.text(f"기존 문서 점검 중... ({i+1}/{total_items}) - {row['파일명']}")
-        
-        old_str = str(row['원재료_문서']).strip()
-        new_str = str(row['원재료']).strip()
-        
-        is_changed = is_ingredient_changed_ai(old_str, new_str)
-        if is_changed:
-            status = "최신화 필요"
-            old_colored, new_colored = get_colored_diff(old_str, new_str)
-            msg_html = f"기존 문서 <b>{row['파일명']}</b> ({row['제품명_문서']})의 원재료명이<br><br>[기존 문서] {old_colored}<br>에서<br>[최신 기준] {new_colored}<br><br>으로 변경 확인되어 제품설명서 최신화 필요합니다."
-        else:
-            status = "적합"
-            msg_html = f"기존 문서 <b>{row['파일명']}</b> ({row['제품명_문서']})은(는) 최신 기준에 맞게 잘 표기되어 있습니다. <b>(적합)</b>"
-            
-        results.append({
-            '파일명': row['파일명'],
-            '품목보고번호': row['품목보고번호'],
-            '제품명': row['제품명_문서'],
-            '상태': status,
-            '알림 메시지': msg_html
-        })
-        progress_bar.progress((i + 1) / total_items)
-        
-    status_text.empty()
-    progress_bar.empty()
-    return pd.DataFrame(results)
+    return compare_product_data(df_specs, df_new, is_tab3=True)
 
 
 # ==========================================
@@ -899,15 +917,15 @@ with tab2:
         elif not new_files_tab2:
             st.warning("비교할 최신 데이터를 업로드해주세요.")
         else:
-            with st.spinner('배합비 대조 중...'):
-                result_df = compare_ingredients(local_base_files, new_files_tab2)
+            with st.spinner('항목 대조 중...'):
+                result_df = compare_product_data(load_and_concat(local_base_files), load_and_concat(new_files_tab2), is_tab3=False)
                 
             if not result_df.empty:
-                st.success("AI 배합비 분석이 완료되었습니다.")
+                st.success("AI 분석이 완료되었습니다.")
                 
-                changes = result_df[result_df['상태'] == '갱신 필요 (변경됨)']
+                changes = result_df[result_df['상태'].str.contains('필요')]
                 if not changes.empty:
-                    st.error(f"총 {len(changes)}건의 실질적 배합비 변경이 감지되었습니다.")
+                    st.error(f"총 {len(changes)}건의 실질적 변경(제품명/소비기한/원재료)이 감지되었습니다.")
                     
                     for idx, row in changes.iterrows():
                         st.markdown(f'''
@@ -916,15 +934,15 @@ with tab2:
                         </div>
                         ''', unsafe_allow_html=True)
                 else:
-                    st.info("실질적인 배합비가 변경된 품목이 없습니다.")
+                    st.info("실질적으로 변경된 품목이 없습니다.")
                     
-                st.dataframe(result_df[['품목보고번호', '제품명', '원재료_기존', '원재료_신규', '상태']])
+                st.dataframe(result_df[['품목보고번호', '제품명', '상태']])
             else:
                 st.warning("데이터를 찾을 수 없거나 형식이 일치하지 않습니다.")
 
 with tab3:
     st.subheader("기존에 작성된 제품설명서 최신화 점검")
-    st.markdown("기존에 만들어둔 **'다중 시트 제품설명서 엑셀 파일'**들을 올리고, 오늘 기준 **'최신 품목제조보고 목록'**과 대조하여 최신화(갱신)가 필요한 문서를 색출합니다.")
+    st.markdown("기존에 만들어둔 **'다중 시트 제품설명서 엑셀 파일'**들을 올리고, 오늘 기준 **'최신 품목제조보고 목록'**과 대조하여 **제품명, 소비기한, 원재료** 3가지 중 변경사항이 있는 문서를 색출합니다.")
     
     col_spec, col_ref = st.columns(2)
     with col_spec:
@@ -955,7 +973,7 @@ with tab3:
                         ''', unsafe_allow_html=True)
                 
                 if not valid.empty:
-                    st.info(f"총 {len(valid)}건의 문서가 최신 기준에 적합합니다.")
+                    st.info(f"총 {len(valid)}건의 문서가 최신 기준에 완벽하게 일치합니다.")
                     for idx, row in valid.iterrows():
                         st.markdown(f'''
                         <div style="background-color: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #c3e6cb;">
