@@ -60,7 +60,6 @@ def generate_excel(text_data, excel_df, doc_number, is_china_export, package_img
     ingredients = ""
     
     if info['품목보고번호'] and not excel_df.empty:
-        # 컬럼 이름 정규화 (유통기한, 소비기한 등) 처리 후 매칭
         col_map = {}
         for col in excel_df.columns:
             col_str = str(col).strip()
@@ -626,7 +625,7 @@ def load_and_concat(files_or_paths):
                     item.seek(0)
                     df = pd.read_html(item)[0]
                     
-            # 1. 컬럼명 정규화 (제품명, 소비기한, 원재료)
+            # 1. 컬럼명 정규화
             col_map = {}
             for col in df.columns:
                 col_str = str(col).strip()
@@ -668,24 +667,24 @@ def is_ingredient_changed_ai(old_ing, new_ing):
         2. 동일한 성분들의 단순 기재 순서 변경은 무시하세요.
         3. 품목제조보고서와 제품설명서 간의 동의어, 한글 라벨링 명칭 차이, 축약어 차이는 '변경되지 않음'으로 간주하세요. 
            (예: '액상과당'과 '기타과당', '옥수수기름'과 '옥배유', '비타민C'와 'L-아스코르브산')
-        4. [핵심] 원재료명 뒤에 붙는 괄호 안의 세부 명칭이나 수식어가 생략되거나 추가된 경우 해당 원료의 배합 비율(%) 수치가 같다면 절대 '변경됨'으로 판단하지 마세요.
+        4. [절대 규칙] 원재료명 뒤에 붙는 괄호 안의 세부 명칭이나 수식어가 생략되거나 추가된 경우, 해당 원료의 배합 비율(%) 수치가 같다면 절대 '변경됨'으로 판단하지 마세요. (상세명칭 축약은 변경이 아닙니다.)
         5. 오직 포함된 원재료의 성분 자체가 완전히 삭제/추가되었거나, 배합 비율(%) 수치가 달라진 경우에만 '변경됨'으로 대답하세요.
         
         [판단 예시]
         예시 1:
-        - 기존: 원액두유(70%),두류가공품(분리대두단백분말)(3.3%),향료(천연땅콩향 H24346)(0.05%)
-        - 신규: 원액두유(70%),두류가공품(3.3%),향료(0.05%)
-        - 정답: 변경 안됨 (이유: 괄호 안 상세명칭이 생략되었으나 비율이 동일함)
+        - 기존: 원액두유(70%),당류가공품(액상알룰로스)(1.666%),두류가공품(분리대두단백분말)(3.3%),향료(천연땅콩향 H24346)(0.05%)
+        - 신규: 원액두유(70%),당류가공품(1.666%),두류가공품(3.3%),향료(0.05%)
+        - 정답: 변경 안됨 (이유: 괄호 안 상세명칭이 생략되었으나 % 비율이 모두 동일하므로 실질적 변경 없음)
         
         예시 2:
         - 기존: 원액두유(70%),탄산칼슘(0.3%),두류가공품(약콩분말)(0.5%),곡류가공품(블랙5곡분말)(0.15%),정제수(28.55%)
         - 신규: 원액두유(70%),탄산칼슘(0.3%),두류가공품(0.5%),곡류가공품(0.15%),정제수(28.55%)
-        - 정답: 변경 안됨
+        - 정답: 변경 안됨 (이유: 약콩분말, 블랙5곡분말 등 상세 괄호 내용만 생략되었고 비율은 동일)
         
         예시 3:
         - 기존: 원액두유(70%), 혼합제제(비타민A, 비타민D)(0.1%)
         - 신규: 원액두유(70%), 혼합제제(비타민A, 비타민E)(0.1%)
-        - 정답: 변경됨 (이유: 괄호 안의 실제 성분 종류가 비타민D에서 E로 변경됨)
+        - 정답: 변경됨 (이유: 괄호 안의 실제 핵심 성분이 비타민D에서 E로 변경됨)
         
         ---
         기존(또는 문서상) 원재료: {old_str}
@@ -753,7 +752,7 @@ def compare_product_data(df_old, df_new, is_tab3=False):
         
         if pd.isna(row['원재료_기존'] if not is_tab3 else row['원재료_문서']):
             status = "신규 등록"
-            msg_html = ""
+            msg_html = f"<b>[신규 등록]</b> 품목제조보고번호 <b>{row['품목보고번호']}</b> (제품명: <b>{name_new}</b>) 항목이 최신 DB에 새롭게 등록되었습니다. 제품설명서를 생성해 주세요."
         else:
             ing_changed = is_ingredient_changed_ai(ing_old, ing_new)
             
@@ -924,16 +923,29 @@ with tab2:
                 st.success("AI 분석이 완료되었습니다.")
                 
                 changes = result_df[result_df['상태'].str.contains('필요')]
+                news = result_df[result_df['상태'] == '신규 등록']
+                
+                # 1. 신규 등록 알림 (파란색)
+                if not news.empty:
+                    st.info(f"총 {len(news)}건의 새로운 제품이 신규 등록되었습니다.")
+                    for idx, row in news.iterrows():
+                        st.markdown(f'''
+                        <div style="background-color: #cce5ff; color: #004085; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #b8daff;">
+                            {row['알림 메시지']}
+                        </div>
+                        ''', unsafe_allow_html=True)
+                
+                # 2. 변경/갱신 알림 (빨간색/노란색)
                 if not changes.empty:
                     st.error(f"총 {len(changes)}건의 실질적 변경(제품명/소비기한/원재료)이 감지되었습니다.")
-                    
                     for idx, row in changes.iterrows():
                         st.markdown(f'''
                         <div style="background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid #ffeeba;">
                             {row['알림 메시지']}
                         </div>
                         ''', unsafe_allow_html=True)
-                else:
+                
+                if changes.empty and news.empty:
                     st.info("실질적으로 변경된 품목이 없습니다.")
                     
                 st.dataframe(result_df[['품목보고번호', '제품명', '상태']])
