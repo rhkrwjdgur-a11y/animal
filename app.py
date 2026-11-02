@@ -625,7 +625,7 @@ def load_and_concat(files_or_paths):
                     item.seek(0)
                     df = pd.read_html(item)[0]
                     
-            # 1. 컬럼명 정규화
+            # 1. 컬럼명 정규화 (제품명, 소비기한, 원재료)
             col_map = {}
             for col in df.columns:
                 col_str = str(col).strip()
@@ -640,7 +640,9 @@ def load_and_concat(files_or_paths):
                 df['소비기한'] = ""
                 
             if '품목보고번호' in df.columns and '제품명' in df.columns and '원재료' in df.columns:
-                df['품목보고번호'] = df['품목보고번호'].astype(str)
+                # [수정] 소수점(.0) 꼬리 및 기호 제거 방어코드
+                df['품목보고번호'] = df['품목보고번호'].astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'[^0-9]', '', regex=True)
+                df = df[df['품목보고번호'] != '']
                 df_list.append(df[['품목보고번호', '제품명', '소비기한', '원재료']])
         except Exception as e:
             st.error(f"데이터 로드 중 오류 발생 ({item}): {e}")
@@ -735,27 +737,39 @@ def compare_product_data(df_old, df_new, is_tab3=False):
     for i, row in merged.iterrows():
         status_text.text(f"항목 대조 중... ({i+1}/{total_items}) - {row.get('제품명_신규', row.get('제품명', '알수없음'))}")
         
-        # 1. 제품명 비교
-        name_old = str(row['제품명_문서'] if is_tab3 else row['제품명_기존']).strip()
-        name_new = str(row['제품명'] if is_tab3 else row['제품명_신규']).strip()
-        name_changed = (name_old != name_new and not pd.isna(row['제품명_기존'] if not is_tab3 else row['제품명_문서']))
-
-        # 2. 소비기한 비교
-        expire_old = str(row['소비기한_문서'] if is_tab3 else row['소비기한_기존']).strip()
-        expire_new = str(row['소비기한'] if is_tab3 else row['소비기한_신규']).strip()
-        expire_changed = (expire_old != expire_new and expire_old != "" and expire_new != "" and not pd.isna(row['소비기한_기존'] if not is_tab3 else row['소비기한_문서']))
-
-        # 3. 원재료 비교 (AI)
-        ing_old = str(row['원재료_문서'] if is_tab3 else row['원재료_기존']).strip()
-        ing_new = str(row['원재료'] if is_tab3 else row['원재료_신규']).strip()
-        ing_changed = False
+        # [핵심 수정 사항] 원재료 빈칸(NaN) 여부가 아닌 '제품명'의 존재 여부로 신규 등록 판단
+        is_newly_registered = pd.isna(row['제품명_기존'] if not is_tab3 else row['제품명_문서'])
         
-        if pd.isna(row['원재료_기존'] if not is_tab3 else row['원재료_문서']):
+        if is_newly_registered:
             status = "신규 등록"
+            name_new = str(row['제품명_신규']).strip()
             msg_html = f"<b>[신규 등록]</b> 품목제조보고번호 <b>{row['품목보고번호']}</b> (제품명: <b>{name_new}</b>) 항목이 최신 DB에 새롭게 등록되었습니다. 제품설명서를 생성해 주세요."
-        else:
-            ing_changed = is_ingredient_changed_ai(ing_old, ing_new)
             
+            results.append({
+                '품목보고번호': row['품목보고번호'],
+                '제품명': name_new,
+                '상태': status,
+                '알림 메시지': msg_html
+            })
+        else:
+            # 1. 제품명 비교
+            name_old = str(row['제품명_문서'] if is_tab3 else row['제품명_기존']).strip()
+            name_new = str(row['제품명'] if is_tab3 else row['제품명_신규']).strip()
+            name_changed = (name_old != name_new)
+
+            # 2. 소비기한 비교
+            expire_old = str(row['소비기한_문서'] if is_tab3 else row['소비기한_기존']).strip() if not pd.isna(row['소비기한_문서'] if is_tab3 else row['소비기한_기존']) else ""
+            expire_new = str(row['소비기한'] if is_tab3 else row['소비기한_신규']).strip() if not pd.isna(row['소비기한'] if is_tab3 else row['소비기한_신규']) else ""
+            expire_changed = (expire_old != expire_new)
+            
+            # 3. 원재료 비교 (AI)
+            old_str = str(row['원재료_문서'] if is_tab3 else row['원재료_기존']).strip() if not pd.isna(row['원재료_문서'] if is_tab3 else row['원재료_기존']) else ""
+            new_str = str(row['원재료'] if is_tab3 else row['원재료_신규']).strip() if not pd.isna(row['원재료'] if is_tab3 else row['원재료_신규']) else ""
+            
+            ing_changed = False
+            if old_str != "" or new_str != "":
+                ing_changed = is_ingredient_changed_ai(old_str, new_str)
+                
             if name_changed or expire_changed or ing_changed:
                 status = "최신화 필요" if is_tab3 else "갱신 필요 (변경됨)"
                 msg_parts = []
@@ -772,24 +786,25 @@ def compare_product_data(df_old, df_new, is_tab3=False):
                     msg_parts.append(f"<br><b>[소비기한 변경]</b><br>[기존] {o_c}<br>[최신] {n_c}")
                     
                 if ing_changed:
-                    o_c, n_c = get_colored_diff(ing_old, ing_new)
+                    o_c, n_c = get_colored_diff(old_str, new_str)
                     msg_parts.append(f"<br><b>[원재료/배합비 변경]</b><br>[기존] {o_c}<br>[최신] {n_c}")
                     
                 msg_html = "".join(msg_parts)
             else:
                 status = "적합" if is_tab3 else "변경 없음"
                 msg_html = f"기존 문서 <b>{row.get('파일명', '')}</b> ({name_old})은(는) 최신 기준에 맞게 잘 표기되어 있습니다. <b>(적합)</b>" if is_tab3 else ""
+                
+            result_dict = {
+                '품목보고번호': row['품목보고번호'],
+                '제품명': name_old if is_tab3 else name_new,
+                '상태': status,
+                '알림 메시지': msg_html
+            }
+            if is_tab3:
+                result_dict['파일명'] = row['파일명']
+                
+            results.append(result_dict)
             
-        result_dict = {
-            '품목보고번호': row['품목보고번호'],
-            '제품명': name_old if is_tab3 else name_new,
-            '상태': status,
-            '알림 메시지': msg_html
-        }
-        if is_tab3:
-            result_dict['파일명'] = row['파일명']
-            
-        results.append(result_dict)
         progress_bar.progress((i + 1) / total_items)
         
     status_text.empty()
@@ -925,7 +940,6 @@ with tab2:
                 changes = result_df[result_df['상태'].str.contains('필요')]
                 news = result_df[result_df['상태'] == '신규 등록']
                 
-                # 1. 신규 등록 알림 (파란색)
                 if not news.empty:
                     st.info(f"총 {len(news)}건의 새로운 제품이 신규 등록되었습니다.")
                     for idx, row in news.iterrows():
@@ -935,7 +949,6 @@ with tab2:
                         </div>
                         ''', unsafe_allow_html=True)
                 
-                # 2. 변경/갱신 알림 (빨간색/노란색)
                 if not changes.empty:
                     st.error(f"총 {len(changes)}건의 실질적 변경(제품명/소비기한/원재료)이 감지되었습니다.")
                     for idx, row in changes.iterrows():
